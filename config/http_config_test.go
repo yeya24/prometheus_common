@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v2"
 )
 
 const (
@@ -113,6 +114,10 @@ var invalidHTTPClientConfigs = []struct {
 		errMsg:               "at most one of oauth2 client_secret, client_secret_file & client_secret_ref must be configured",
 	},
 	{
+		httpClientConfigFile: "testdata/http.conf.oauth2-certificate-and-file-set.bad.yml",
+		errMsg:               "at most one of oauth2 client_certificate_key, client_certificate_key_file & client_certificate_key_ref must be configured using grant-type=urn:ietf:params:oauth:grant-type:jwt-beare",
+	},
+	{
 		httpClientConfigFile: "testdata/http.conf.oauth2-no-client-id.bad.yaml",
 		errMsg:               "oauth2 client_id must be configured",
 	},
@@ -181,7 +186,7 @@ func TestNewClientFromConfig(t *testing.T) {
 					InsecureSkipVerify: true,
 				},
 			},
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				fmt.Fprint(w, ExpectedMessage)
 			},
 		},
@@ -195,7 +200,7 @@ func TestNewClientFromConfig(t *testing.T) {
 					InsecureSkipVerify: false,
 				},
 			},
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				fmt.Fprint(w, ExpectedMessage)
 			},
 		},
@@ -369,13 +374,14 @@ func TestNewClientFromConfig(t *testing.T) {
 			},
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				username, password, ok := r.BasicAuth()
-				if !ok {
+				switch {
+				case !ok:
 					fmt.Fprintf(w, "The Authorization header wasn't set")
-				} else if ExpectedUsername != username {
+				case ExpectedUsername != username:
 					fmt.Fprintf(w, "The expected username (%s) differs from the obtained username (%s).", ExpectedUsername, username)
-				} else if ExpectedPassword != password {
+				case ExpectedPassword != password:
 					fmt.Fprintf(w, "The expected password (%s) differs from the obtained password (%s).", ExpectedPassword, password)
-				} else {
+				default:
 					fmt.Fprint(w, ExpectedMessage)
 				}
 			},
@@ -510,9 +516,7 @@ func TestNewClientFromConfig(t *testing.T) {
 	for _, validConfig := range newClientValidConfig {
 		t.Run("", func(t *testing.T) {
 			testServer, err := newTestServer(validConfig.handler)
-			if err != nil {
-				t.Fatal(err.Error())
-			}
+			require.NoError(t, err)
 			defer testServer.Close()
 
 			if validConfig.clientConfig.OAuth2 != nil {
@@ -522,9 +526,7 @@ func TestNewClientFromConfig(t *testing.T) {
 			}
 
 			err = validConfig.clientConfig.Validate()
-			if err != nil {
-				t.Fatal(err.Error())
-			}
+			require.NoError(t, err)
 			client, err := NewClientFromConfig(validConfig.clientConfig, "test")
 			if err != nil {
 				t.Errorf("Can't create a client from this config: %+v", validConfig.clientConfig)
@@ -585,13 +587,9 @@ func TestProxyConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := tc.loader(tc.testFn)
 			if tc.isValid {
-				if err != nil {
-					t.Fatalf("Error validating %s: %s", tc.testFn, err)
-				}
+				require.NoErrorf(t, err, "Error validating %s: %s", tc.testFn, err)
 			} else {
-				if err == nil {
-					t.Fatalf("Expecting error validating %s but got %s", tc.testFn, err)
-				}
+				require.Errorf(t, err, "Expecting error validating %s but got %s", tc.testFn, err)
 			}
 		})
 	}
@@ -609,7 +607,7 @@ func TestNewClientFromInvalidConfig(t *testing.T) {
 					InsecureSkipVerify: true,
 				},
 			},
-			errorMsg: fmt.Sprintf("unable to read CA cert: unable to read file %s", MissingCA),
+			errorMsg: "unable to read CA cert: unable to read file " + MissingCA,
 		},
 		{
 			clientConfig: HTTPClientConfig{
@@ -618,7 +616,7 @@ func TestNewClientFromInvalidConfig(t *testing.T) {
 					InsecureSkipVerify: true,
 				},
 			},
-			errorMsg: fmt.Sprintf("unable to use specified CA cert file %s", InvalidCA),
+			errorMsg: "unable to use specified CA cert file " + InvalidCA,
 		},
 	}
 
@@ -643,9 +641,7 @@ func TestCustomDialContextFunc(t *testing.T) {
 
 	cfg := HTTPClientConfig{}
 	client, err := NewClientFromConfig(cfg, "test", WithDialContextFunc(dialFn))
-	if err != nil {
-		t.Fatalf("Can't create a client from this config: %+v", cfg)
-	}
+	require.NoErrorf(t, err, "Can't create a client from this config: %+v", cfg)
 
 	_, err = client.Get("http://localhost")
 	if err == nil || !strings.Contains(err.Error(), ExpectedError) {
@@ -658,18 +654,12 @@ func TestCustomIdleConnTimeout(t *testing.T) {
 
 	cfg := HTTPClientConfig{}
 	rt, err := NewRoundTripperFromConfig(cfg, "test", WithIdleConnTimeout(timeout))
-	if err != nil {
-		t.Fatalf("Can't create a round-tripper from this config: %+v", cfg)
-	}
+	require.NoErrorf(t, err, "Can't create a round-tripper from this config: %+v", cfg)
 
 	transport, ok := rt.(*http.Transport)
-	if !ok {
-		t.Fatalf("Unexpected transport: %+v", transport)
-	}
+	require.Truef(t, ok, "Unexpected transport: %+v", transport)
 
-	if transport.IdleConnTimeout != timeout {
-		t.Fatalf("Unexpected idle connection timeout: %+v", timeout)
-	}
+	require.Equalf(t, transport.IdleConnTimeout, timeout, "Unexpected idle connection timeout: %+v", timeout)
 }
 
 func TestMissingBearerAuthFile(t *testing.T) {
@@ -694,24 +684,16 @@ func TestMissingBearerAuthFile(t *testing.T) {
 	}
 
 	testServer, err := newTestServer(handler)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
+	require.NoError(t, err)
 	defer testServer.Close()
 
 	client, err := NewClientFromConfig(cfg, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	_, err = client.Get(testServer.URL)
-	if err == nil {
-		t.Fatal("No error is returned here")
-	}
+	require.Errorf(t, err, "No error is returned here")
 
-	if !strings.Contains(err.Error(), "unable to read authorization credentials: unable to read file missing/bearer.token: open missing/bearer.token: no such file or directory") {
-		t.Fatal("wrong error message being returned")
-	}
+	require.ErrorContainsf(t, err, "unable to read authorization credentials: unable to read file missing/bearer.token: open missing/bearer.token: no such file or directory", "wrong error message being returned")
 }
 
 func TestBearerAuthRoundTripper(t *testing.T) {
@@ -729,7 +711,7 @@ func TestBearerAuthRoundTripper(t *testing.T) {
 
 	// Normal flow.
 	bearerAuthRoundTripper := NewAuthorizationCredentialsRoundTripper("Bearer", NewInlineSecret(BearerToken), fakeRoundTripper)
-	request, _ := http.NewRequest("GET", "/hitchhiker", nil)
+	request, _ := http.NewRequest(http.MethodGet, "/hitchhiker", nil)
 	request.Header.Set("User-Agent", "Douglas Adams mind")
 	_, err := bearerAuthRoundTripper.RoundTrip(request)
 	if err != nil {
@@ -738,7 +720,7 @@ func TestBearerAuthRoundTripper(t *testing.T) {
 
 	// Should honor already Authorization header set.
 	bearerAuthRoundTripperShouldNotModifyExistingAuthorization := NewAuthorizationCredentialsRoundTripper("Bearer", NewInlineSecret(newBearerToken), fakeRoundTripper)
-	request, _ = http.NewRequest("GET", "/hitchhiker", nil)
+	request, _ = http.NewRequest(http.MethodGet, "/hitchhiker", nil)
 	request.Header.Set("Authorization", ExpectedBearer)
 	_, err = bearerAuthRoundTripperShouldNotModifyExistingAuthorization.RoundTrip(request)
 	if err != nil {
@@ -757,7 +739,7 @@ func TestBearerAuthFileRoundTripper(t *testing.T) {
 
 	// Normal flow.
 	bearerAuthRoundTripper := NewAuthorizationCredentialsRoundTripper("Bearer", &FileSecret{file: BearerTokenFile}, fakeRoundTripper)
-	request, _ := http.NewRequest("GET", "/hitchhiker", nil)
+	request, _ := http.NewRequest(http.MethodGet, "/hitchhiker", nil)
 	request.Header.Set("User-Agent", "Douglas Adams mind")
 	_, err := bearerAuthRoundTripper.RoundTrip(request)
 	if err != nil {
@@ -766,7 +748,7 @@ func TestBearerAuthFileRoundTripper(t *testing.T) {
 
 	// Should honor already Authorization header set.
 	bearerAuthRoundTripperShouldNotModifyExistingAuthorization := NewAuthorizationCredentialsRoundTripper("Bearer", &FileSecret{file: MissingBearerTokenFile}, fakeRoundTripper)
-	request, _ = http.NewRequest("GET", "/hitchhiker", nil)
+	request, _ = http.NewRequest(http.MethodGet, "/hitchhiker", nil)
 	request.Header.Set("Authorization", ExpectedBearer)
 	_, err = bearerAuthRoundTripperShouldNotModifyExistingAuthorization.RoundTrip(request)
 	if err != nil {
@@ -784,10 +766,8 @@ func TestTLSConfig(t *testing.T) {
 	}
 
 	tlsCAChain, err := os.ReadFile(TLSCAChainPath)
-	if err != nil {
-		t.Fatalf("Can't read the CA certificate chain (%s)",
-			TLSCAChainPath)
-	}
+	require.NoErrorf(t, err, "Can't read the CA certificate chain (%s)",
+		TLSCAChainPath)
 	rootCAs := x509.NewCertPool()
 	rootCAs.AppendCertsFromPEM(tlsCAChain)
 
@@ -798,38 +778,26 @@ func TestTLSConfig(t *testing.T) {
 	}
 
 	tlsConfig, err := NewTLSConfig(&configTLSConfig)
-	if err != nil {
-		t.Fatalf("Can't create a new TLS Config from a configuration (%s).", err)
-	}
+	require.NoErrorf(t, err, "Can't create a new TLS Config from a configuration (%s).", err)
 
 	clientCertificate, err := tls.LoadX509KeyPair(ClientCertificatePath, ClientKeyNoPassPath)
-	if err != nil {
-		t.Fatalf("Can't load the client key pair ('%s' and '%s'). Reason: %s",
-			ClientCertificatePath, ClientKeyNoPassPath, err)
-	}
+	require.NoErrorf(t, err, "Can't load the client key pair ('%s' and '%s'). Reason: %s",
+		ClientCertificatePath, ClientKeyNoPassPath, err)
 	cert, err := tlsConfig.GetClientCertificate(nil)
-	if err != nil {
-		t.Fatalf("unexpected error returned by tlsConfig.GetClientCertificate(): %s", err)
-	}
-	if !reflect.DeepEqual(cert, &clientCertificate) {
-		t.Fatalf("Unexpected client certificate result: \n\n%+v\n expected\n\n%+v", cert, clientCertificate)
-	}
+	require.NoErrorf(t, err, "unexpected error returned by tlsConfig.GetClientCertificate(): %s", err)
+	require.Truef(t, reflect.DeepEqual(cert, &clientCertificate), "Unexpected client certificate result: \n\n%+v\n expected\n\n%+v", cert, clientCertificate)
 
 	// tlsConfig.rootCAs.LazyCerts contains functions getCert() in go 1.16, which are
 	// never equal. Compare the Subjects instead.
 	//nolint:staticcheck // Ignore SA1019. (*CertPool).Subjects is deprecated because it may not include the system certs but it isn't the case here.
-	if !reflect.DeepEqual(tlsConfig.RootCAs.Subjects(), expectedTLSConfig.RootCAs.Subjects()) {
-		t.Fatalf("Unexpected RootCAs result: \n\n%+v\n expected\n\n%+v", tlsConfig.RootCAs.Subjects(), expectedTLSConfig.RootCAs.Subjects())
-	}
+	require.Truef(t, reflect.DeepEqual(tlsConfig.RootCAs.Subjects(), expectedTLSConfig.RootCAs.Subjects()), "Unexpected RootCAs result: \n\n%+v\n expected\n\n%+v", tlsConfig.RootCAs.Subjects(), expectedTLSConfig.RootCAs.Subjects())
 	tlsConfig.RootCAs = nil
 	expectedTLSConfig.RootCAs = nil
 
 	// Non-nil functions are never equal.
 	tlsConfig.GetClientCertificate = nil
 
-	if !reflect.DeepEqual(tlsConfig, expectedTLSConfig) {
-		t.Fatalf("Unexpected TLS Config result: \n\n%+v\n expected\n\n%+v", tlsConfig, expectedTLSConfig)
-	}
+	require.Truef(t, reflect.DeepEqual(tlsConfig, expectedTLSConfig), "Unexpected TLS Config result: \n\n%+v\n expected\n\n%+v", tlsConfig, expectedTLSConfig)
 }
 
 func TestTLSConfigEmpty(t *testing.T) {
@@ -842,13 +810,9 @@ func TestTLSConfigEmpty(t *testing.T) {
 	}
 
 	tlsConfig, err := NewTLSConfig(&configTLSConfig)
-	if err != nil {
-		t.Fatalf("Can't create a new TLS Config from a configuration (%s).", err)
-	}
+	require.NoErrorf(t, err, "Can't create a new TLS Config from a configuration (%s).", err)
 
-	if !reflect.DeepEqual(tlsConfig, expectedTLSConfig) {
-		t.Fatalf("Unexpected TLS Config result: \n\n%+v\n expected\n\n%+v", tlsConfig, expectedTLSConfig)
-	}
+	require.Truef(t, reflect.DeepEqual(tlsConfig, expectedTLSConfig), "Unexpected TLS Config result: \n\n%+v\n expected\n\n%+v", tlsConfig, expectedTLSConfig)
 }
 
 func TestTLSConfigInvalidCA(t *testing.T) {
@@ -864,7 +828,7 @@ func TestTLSConfigInvalidCA(t *testing.T) {
 				ServerName:         "",
 				InsecureSkipVerify: false,
 			},
-			errorMessage: fmt.Sprintf("unable to read CA cert: unable to read file %s", MissingCA),
+			errorMessage: "unable to read CA cert: unable to read file " + MissingCA,
 		},
 		{
 			configTLSConfig: TLSConfig{
@@ -874,7 +838,7 @@ func TestTLSConfigInvalidCA(t *testing.T) {
 				ServerName:         "",
 				InsecureSkipVerify: false,
 			},
-			errorMessage: fmt.Sprintf("unable to read specified client cert: unable to read file %s", MissingCert),
+			errorMessage: "unable to read specified client cert: unable to read file " + MissingCert,
 		},
 		{
 			configTLSConfig: TLSConfig{
@@ -884,7 +848,7 @@ func TestTLSConfigInvalidCA(t *testing.T) {
 				ServerName:         "",
 				InsecureSkipVerify: false,
 			},
-			errorMessage: fmt.Sprintf("unable to read specified client key: unable to read file %s", MissingKey),
+			errorMessage: "unable to read specified client key: unable to read file " + MissingKey,
 		},
 		{
 			configTLSConfig: TLSConfig{
@@ -924,41 +888,26 @@ func TestTLSConfigInvalidCA(t *testing.T) {
 
 func TestBasicAuthNoPassword(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.no-password.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
-	if username, _ := rt.username.Fetch(context.Background()); username != "user" {
-		t.Errorf("Bad HTTP client username: %s", username)
-	}
-	if rt.password != nil {
-		t.Errorf("Expected empty HTTP client password")
-	}
+	username, _ := rt.username.Fetch(context.Background())
+	require.Equalf(t, "user", username, "Bad HTTP client username: %s", username)
+	require.Nilf(t, rt.password, "Expected empty HTTP client password")
 }
 
 func TestBasicAuthNoUsername(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.no-username.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
 	if rt.username != nil {
 		t.Errorf("Got unexpected username")
@@ -970,18 +919,12 @@ func TestBasicAuthNoUsername(t *testing.T) {
 
 func TestBasicAuthPasswordFile(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.good.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
 	if username, _ := rt.username.Fetch(context.Background()); username != "user" {
 		t.Errorf("Bad HTTP client username: %s", username)
@@ -995,7 +938,7 @@ type secretManager struct {
 	data map[string]string
 }
 
-func (m *secretManager) Fetch(ctx context.Context, secretRef string) (string, error) {
+func (m *secretManager) Fetch(_ context.Context, secretRef string) (string, error) {
 	secretData, ok := m.data[secretRef]
 	if !ok {
 		return "", fmt.Errorf("unknown secret %s", secretRef)
@@ -1005,9 +948,7 @@ func (m *secretManager) Fetch(ctx context.Context, secretRef string) (string, er
 
 func TestBasicAuthSecretManager(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.ref.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	manager := secretManager{
 		data: map[string]string{
 			"admin": "user",
@@ -1015,14 +956,10 @@ func TestBasicAuthSecretManager(t *testing.T) {
 		},
 	}
 	client, err := NewClientFromConfig(*cfg, "test", WithSecretManager(&manager))
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
 	if username, _ := rt.username.Fetch(context.Background()); username != "user" {
 		t.Errorf("Bad HTTP client username: %s", username)
@@ -1034,9 +971,7 @@ func TestBasicAuthSecretManager(t *testing.T) {
 
 func TestBasicAuthSecretManagerNotFound(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.ref.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	manager := secretManager{
 		data: map[string]string{
 			"admin1": "user",
@@ -1044,14 +979,10 @@ func TestBasicAuthSecretManagerNotFound(t *testing.T) {
 		},
 	}
 	client, err := NewClientFromConfig(*cfg, "test", WithSecretManager(&manager))
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
 	if _, err := rt.username.Fetch(context.Background()); !strings.Contains(err.Error(), "unknown secret admin") {
 		t.Errorf("Unexpected error message: %s", err)
@@ -1063,18 +994,12 @@ func TestBasicAuthSecretManagerNotFound(t *testing.T) {
 
 func TestBasicUsernameFile(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.basic-auth.username-file.good.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	rt, ok := client.Transport.(*basicAuthRoundTripper)
-	if !ok {
-		t.Fatalf("Error casting to basic auth transport, %v", client.Transport)
-	}
+	require.Truef(t, ok, "Error casting to basic auth transport, %v", client.Transport)
 
 	if username, _ := rt.username.Fetch(context.Background()); username != "testuser" {
 		t.Errorf("Bad HTTP client username: %s", username)
@@ -1098,16 +1023,14 @@ func getCertificateBlobs(t *testing.T) map[string][]byte {
 	bs := make(map[string][]byte, len(files)+1)
 	for _, f := range files {
 		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		bs[f] = b
 	}
 
 	return bs
 }
 
-func writeCertificate(bs map[string][]byte, src string, dst string) {
+func writeCertificate(bs map[string][]byte, src, dst string) {
 	b, ok := bs[src]
 	if !ok {
 		panic(fmt.Sprintf("Couldn't find %q in bs", src))
@@ -1121,20 +1044,16 @@ func TestTLSRoundTripper(t *testing.T) {
 	bs := getCertificateBlobs(t)
 
 	tmpDir, err := os.MkdirTemp("", "tlsroundtripper")
-	if err != nil {
-		t.Fatal("Failed to create tmp dir", err)
-	}
+	require.NoErrorf(t, err, "Failed to create tmp dir")
 	defer os.RemoveAll(tmpDir)
 
 	ca, cert, key := filepath.Join(tmpDir, "ca"), filepath.Join(tmpDir, "cert"), filepath.Join(tmpDir, "key")
 
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, ExpectedMessage)
 	}
 	testServer, err := newTestServer(handler)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
+	require.NoError(t, err)
 	defer testServer.Close()
 
 	testCases := []struct {
@@ -1209,37 +1128,28 @@ func TestTLSRoundTripper(t *testing.T) {
 
 	var c *http.Client
 	for i, tc := range testCases {
-		tc := tc
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			writeCertificate(bs, tc.ca, ca)
 			writeCertificate(bs, tc.cert, cert)
 			writeCertificate(bs, tc.key, key)
 			if c == nil {
 				c, err = NewClientFromConfig(cfg, "test")
-				if err != nil {
-					t.Fatalf("Error creating HTTP Client: %v", err)
-				}
+				require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 			}
 
 			req, err := http.NewRequest(http.MethodGet, testServer.URL, nil)
-			if err != nil {
-				t.Fatalf("Error creating HTTP request: %v", err)
-			}
+			require.NoErrorf(t, err, "Error creating HTTP request: %v", err)
 			r, err := c.Do(req)
 			if len(tc.errMsg) > 0 {
 				if err == nil {
 					r.Body.Close()
 					t.Fatalf("Could connect to the test server.")
 				}
-				if !strings.Contains(err.Error(), tc.errMsg) {
-					t.Fatalf("Expected error message to contain %q, got %q", tc.errMsg, err)
-				}
+				require.ErrorContainsf(t, err, tc.errMsg, "Expected error message to contain %q, got %q", tc.errMsg, err)
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("Can't connect to the test server")
-			}
+			require.NoErrorf(t, err, "Can't connect to the test server")
 
 			b, err := io.ReadAll(r.Body)
 			r.Body.Close()
@@ -1256,13 +1166,11 @@ func TestTLSRoundTripper(t *testing.T) {
 }
 
 func TestTLSRoundTripper_Inline(t *testing.T) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, ExpectedMessage)
 	}
 	testServer, err := newTestServer(handler)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
+	require.NoError(t, err)
 	defer testServer.Close()
 
 	testCases := []struct {
@@ -1330,7 +1238,6 @@ func TestTLSRoundTripper_Inline(t *testing.T) {
 	}
 
 	for i, tc := range testCases {
-		tc := tc
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			cfg := HTTPClientConfig{
 				TLSConfig: TLSConfig{
@@ -1346,22 +1253,16 @@ func TestTLSRoundTripper_Inline(t *testing.T) {
 
 			c, err := NewClientFromConfig(cfg, "test")
 			if tc.errMsg != "" {
-				if !strings.Contains(err.Error(), tc.errMsg) {
-					t.Fatalf("Expected error message to contain %q, got %q", tc.errMsg, err)
-				}
+				require.ErrorContainsf(t, err, tc.errMsg, "Expected error message to contain %q, got %q", tc.errMsg, err)
 				return
 			} else if err != nil {
 				t.Fatalf("Error creating HTTP Client: %v", err)
 			}
 
 			req, err := http.NewRequest(http.MethodGet, testServer.URL, nil)
-			if err != nil {
-				t.Fatalf("Error creating HTTP request: %v", err)
-			}
+			require.NoErrorf(t, err, "Error creating HTTP request: %v", err)
 			r, err := c.Do(req)
-			if err != nil {
-				t.Fatalf("Can't connect to the test server")
-			}
+			require.NoErrorf(t, err, "Can't connect to the test server")
 
 			b, err := io.ReadAll(r.Body)
 			r.Body.Close()
@@ -1381,20 +1282,16 @@ func TestTLSRoundTripperRaces(t *testing.T) {
 	bs := getCertificateBlobs(t)
 
 	tmpDir, err := os.MkdirTemp("", "tlsroundtripper")
-	if err != nil {
-		t.Fatal("Failed to create tmp dir", err)
-	}
+	require.NoErrorf(t, err, "Failed to create tmp dir")
 	defer os.RemoveAll(tmpDir)
 
 	ca, cert, key := filepath.Join(tmpDir, "ca"), filepath.Join(tmpDir, "cert"), filepath.Join(tmpDir, "key")
 
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, ExpectedMessage)
 	}
 	testServer, err := newTestServer(handler)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
+	require.NoError(t, err)
 	defer testServer.Close()
 
 	cfg := HTTPClientConfig{
@@ -1411,18 +1308,14 @@ func TestTLSRoundTripperRaces(t *testing.T) {
 	writeCertificate(bs, ClientCertificatePath, cert)
 	writeCertificate(bs, ClientKeyNoPassPath, key)
 	c, err = NewClientFromConfig(cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	var wg sync.WaitGroup
 	ch := make(chan struct{})
 	var total, ok int64
 	// Spawn 10 Go routines polling the server concurrently.
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			for {
 				select {
 				case <-ch:
@@ -1436,13 +1329,11 @@ func TestTLSRoundTripperRaces(t *testing.T) {
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	// Change the CA file every 10ms for 1 second.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		i := 0
 		for {
 			tick := time.NewTicker(10 * time.Millisecond)
@@ -1458,25 +1349,19 @@ func TestTLSRoundTripperRaces(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	wg.Wait()
-	if ok == total {
-		t.Fatalf("Expecting some requests to fail but got %d/%d successful requests", ok, total)
-	}
+	require.NotEqualf(t, ok, total, "Expecting some requests to fail but got %d/%d successful requests", ok, total)
 }
 
 func TestHideHTTPClientConfigSecrets(t *testing.T) {
 	c, _, err := LoadHTTPConfigFile("testdata/http.conf.good.yml")
-	if err != nil {
-		t.Fatalf("Error parsing %s: %s", "testdata/http.conf.good.yml", err)
-	}
+	require.NoErrorf(t, err, "Error parsing %s: %s", "testdata/http.conf.good.yml", err)
 
 	// String method must not reveal authentication credentials.
 	s := c.String()
-	if strings.Contains(s, "mysecret") {
-		t.Fatal("http client config's String method reveals authentication credentials.")
-	}
+	require.NotContainsf(t, s, "mysecret", "http client config's String method reveals authentication credentials.")
 }
 
 func TestDefaultFollowRedirect(t *testing.T) {
@@ -1489,15 +1374,378 @@ func TestDefaultFollowRedirect(t *testing.T) {
 	}
 }
 
+func TestCrossHostRedirectDropsCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config HTTPClientConfig
+	}{
+		{
+			name: "bearer token",
+			config: HTTPClientConfig{
+				FollowRedirects: true,
+				Authorization: &Authorization{
+					Type:        "Bearer",
+					Credentials: "secret-token",
+				},
+			},
+		},
+		{
+			name: "basic auth",
+			config: HTTPClientConfig{
+				FollowRedirects: true,
+				BasicAuth: &BasicAuth{
+					Username: "user",
+					Password: "pass",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// target listens on 127.0.0.1 but origin redirects using "localhost"
+			// as the hostname. "127.0.0.1" and "localhost" are different hostname
+			// strings, so Go's redirect rules strip credentials on the redirect.
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "" {
+					http.Error(w, "credentials leaked to cross-host redirect target", http.StatusForbidden)
+					return
+				}
+				fmt.Fprint(w, ExpectedMessage)
+			}))
+			t.Cleanup(target.Close)
+
+			// Build a redirect URL that uses "localhost" instead of "127.0.0.1".
+			targetPort := target.Listener.Addr().(*net.TCPAddr).Port
+			targetLocalhostURL := fmt.Sprintf("http://localhost:%d", targetPort)
+
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, targetLocalhostURL+r.URL.Path, http.StatusFound)
+			}))
+			t.Cleanup(origin.Close)
+
+			client, err := NewClientFromConfig(tc.config, "test")
+			require.NoError(t, err)
+
+			resp, err := client.Get(origin.URL)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+		})
+	}
+}
+
+func TestIsDomainOrSubdomain(t *testing.T) {
+	for _, tc := range []struct {
+		sub, parent string
+		want        bool
+	}{
+		{"example.com", "example.com", true},
+		{"sub.example.com", "example.com", true},
+		{"deep.sub.example.com", "example.com", true},
+		{"notexample.com", "example.com", false},
+		{"example.com", "sub.example.com", false},
+		{"bar.com", "foo.com", false},
+		{"127.0.0.1", "127.0.0.1", true},
+		{"localhost", "127.0.0.1", false},
+		{"127.0.0.1", "localhost", false},
+		{"::1", "::1", true},
+		{"::2", "::1", false},
+		{"::1", "example.com", false},
+		// Zone ID containing a hostname must not match as a subdomain.
+		{"::1%.www.example.com", "example.com", false},
+		{"fe80::1%eth0", "eth0", false},
+		// Empty parent must never match.
+		{"example.com", "", false},
+		{"", "", false},
+		// Trailing-dot FQDN: "sub.example.com." vs "example.com" are not equal
+		// because isDomainOrSubdomain operates on raw strings; callers normalise
+		// via Hostname() which strips trailing dots in practice.
+		{"sub.example.com.", "example.com.", true},
+		{"sub.example.com.", "example.com", false},
+		// Case folding is the caller's responsibility (shouldSendCredentialsOnRedirect
+		// lowercases before calling); isDomainOrSubdomain itself is case-sensitive.
+		{"Sub.Example.Com", "example.com", false},
+	} {
+		t.Run(tc.sub+"→"+tc.parent, func(t *testing.T) {
+			require.Equal(t, tc.want, isDomainOrSubdomain(tc.sub, tc.parent))
+		})
+	}
+}
+
+func TestSameHostRedirectKeepsCredentials(t *testing.T) {
+	credsSeen := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/end", http.StatusFound)
+	})
+	mux.HandleFunc("/end", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credsSeen = true
+		}
+		fmt.Fprint(w, ExpectedMessage)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		Authorization: &Authorization{
+			Type:        "Bearer",
+			Credentials: "secret-token",
+		},
+	}
+	client, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	resp, err := client.Get(server.URL + "/start")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+	require.Truef(t, credsSeen, "credentials should be forwarded on same-host redirect")
+}
+
+func TestRedirectBackToOriginalHostKeepsCredentialsStripped(t *testing.T) {
+	// Mirror net/http's sticky behaviour: once a redirect chain leaves the
+	// original host, credentials must stay stripped for the rest of the chain,
+	// even when a later hop redirects back to the original host.
+	credsSeen := false
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credsSeen = true
+		}
+		fmt.Fprint(w, ExpectedMessage)
+	}))
+	t.Cleanup(final.Close)
+
+	// middle listens on 127.0.0.1 but is reached via "localhost", so the hop
+	// from the origin (127.0.0.1) to middle is cross-host. It then redirects
+	// back to final, which shares the original "127.0.0.1" hostname.
+	middle := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL, http.StatusFound)
+	}))
+	t.Cleanup(middle.Close)
+	middlePort := middle.Listener.Addr().(*net.TCPAddr).Port
+	middleLocalhostURL := fmt.Sprintf("http://localhost:%d", middlePort)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, middleLocalhostURL, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		Authorization: &Authorization{
+			Type:        "Bearer",
+			Credentials: "secret-token",
+		},
+	}
+	client, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	resp, err := client.Get(origin.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.Falsef(t, credsSeen, "credentials must stay stripped after leaving the original host, even when redirected back to it")
+}
+
+func TestRoundTripperCrossHostRedirectDropsCredentials(t *testing.T) {
+	// Verify that a custom http.Client built from NewRoundTripperFromConfig
+	// (not NewClientFromConfig) also strips credentials on cross-host redirects,
+	// because isCrossHostRedirect uses req.Response and requires no CheckRedirect hook.
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			http.Error(w, "credentials leaked to cross-host redirect target", http.StatusForbidden)
+			return
+		}
+		fmt.Fprint(w, ExpectedMessage)
+	}))
+	t.Cleanup(target.Close)
+
+	targetPort := target.Listener.Addr().(*net.TCPAddr).Port
+	targetLocalhostURL := fmt.Sprintf("http://localhost:%d", targetPort)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetLocalhostURL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		Authorization: &Authorization{
+			Type:        "Bearer",
+			Credentials: "secret-token",
+		},
+	}
+	rt, err := NewRoundTripperFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	client := &http.Client{Transport: rt}
+	resp, err := client.Get(origin.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+}
+
+func TestOAuth2CrossHostRedirectDropsCredentials(t *testing.T) {
+	// target checks that no OAuth2 Bearer token arrives on a cross-host redirect.
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			http.Error(w, "credentials leaked to cross-host redirect target", http.StatusForbidden)
+			return
+		}
+		fmt.Fprint(w, ExpectedMessage)
+	}))
+	t.Cleanup(target.Close)
+
+	targetPort := target.Listener.Addr().(*net.TCPAddr).Port
+	targetLocalhostURL := fmt.Sprintf("http://localhost:%d", targetPort)
+
+	originAuthSeen := ""
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originAuthSeen = r.Header.Get("Authorization")
+		http.Redirect(w, r, targetLocalhostURL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	// tokenServer issues a static Bearer token used by the OAuth2 round-tripper.
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		res, _ := json.Marshal(oauth2TestServerResponse{
+			AccessToken: "oauth2-secret-token",
+			TokenType:   "Bearer",
+		})
+		w.Header().Add("Content-Type", "application/json")
+		_, _ = w.Write(res)
+	}))
+	t.Cleanup(tokenServer.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		OAuth2: &OAuth2{
+			ClientID: "testclient",
+			TokenURL: tokenServer.URL + "/token",
+		},
+	}
+	client, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	resp, err := client.Get(origin.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+	require.NotEmptyf(t, originAuthSeen, "OAuth2 Bearer token must be present on the initial request to origin")
+}
+
+func TestMultiHopCrossHostRedirectDropsCredentials(t *testing.T) {
+	// Chain: origin (127.0.0.1) → hop (localhost) → final (localhost).
+	// Both hop and final differ from the original host (127.0.0.1 ≠ localhost),
+	// so isCrossHostRedirect must strip credentials from both hops.
+	// Note that hop→final is same-hostname (localhost→localhost), which confirms
+	// that the cross-host check compares against the original host, not the
+	// immediately preceding hop.
+	finalAuthSeen := ""
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		finalAuthSeen = r.Header.Get("Authorization")
+		fmt.Fprint(w, ExpectedMessage)
+	}))
+	t.Cleanup(final.Close)
+
+	finalPort := final.Listener.Addr().(*net.TCPAddr).Port
+	finalURL := fmt.Sprintf("http://localhost:%d/", finalPort)
+
+	hopAuthSeen := ""
+	hop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hopAuthSeen = r.Header.Get("Authorization")
+		http.Redirect(w, r, finalURL, http.StatusFound)
+	}))
+	t.Cleanup(hop.Close)
+
+	hopPort := hop.Listener.Addr().(*net.TCPAddr).Port
+	hopURL := fmt.Sprintf("http://localhost:%d/", hopPort)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, hopURL, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		Authorization: &Authorization{
+			Type:        "Bearer",
+			Credentials: "secret-token",
+		},
+	}
+	client, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	resp, err := client.Get(origin.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+	require.Emptyf(t, hopAuthSeen, "credentials must not reach hop: original host 127.0.0.1 differs from localhost")
+	require.Emptyf(t, finalAuthSeen, "credentials must not reach final: original host 127.0.0.1 still differs from localhost")
+}
+
+func TestPortChangeRedirectKeepsCredentials(t *testing.T) {
+	// Both servers bind to 127.0.0.1; only the port differs. Credentials must
+	// be forwarded because the hostname is the same.
+	credsSeen := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credsSeen = true
+		}
+		fmt.Fprint(w, ExpectedMessage)
+	}))
+	t.Cleanup(target.Close)
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	t.Cleanup(origin.Close)
+
+	cfg := HTTPClientConfig{
+		FollowRedirects: true,
+		Authorization: &Authorization{
+			Type:        "Bearer",
+			Credentials: "secret-token",
+		},
+	}
+	client, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	resp, err := client.Get(origin.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, ExpectedMessage, strings.TrimSpace(string(body)))
+	require.Truef(t, credsSeen, "credentials must be forwarded when only the port changes")
+}
+
 func TestValidateHTTPConfig(t *testing.T) {
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.good.yml")
 	if err != nil {
 		t.Errorf("Error loading HTTP client config: %v", err)
 	}
 	err = cfg.Validate()
-	if err != nil {
-		t.Fatalf("Error validating %s: %s", "testdata/http.conf.good.yml", err)
-	}
+	require.NoErrorf(t, err, "Error validating %s: %s", "testdata/http.conf.good.yml", err)
 }
 
 func TestInvalidHTTPConfigs(t *testing.T) {
@@ -1518,7 +1766,7 @@ type roundTrip struct {
 	theError    error
 }
 
-func (rt *roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
+func (rt *roundTrip) RoundTrip(*http.Request) (*http.Response, error) {
 	return rt.theResponse, rt.theError
 }
 
@@ -1555,16 +1803,18 @@ type testOAuthServer struct {
 }
 
 // newTestOAuthServer returns a new test server with the expected base64 encoded client ID and secret.
-func newTestOAuthServer(t testing.TB, expectedAuth *string) testOAuthServer {
+func newTestOAuthServer(t testing.TB, expectedAuth func(testing.TB, string)) testOAuthServer {
 	var previousAuth string
 	tokenTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth != *expectedAuth {
-			t.Fatalf("bad auth, expected %s, got %s", *expectedAuth, auth)
+		if auth == "" {
+			require.NoErrorf(t, r.ParseForm(), "Failed to parse form")
+			auth = r.FormValue("assertion")
 		}
-		if auth == previousAuth {
-			t.Fatal("token endpoint called twice")
-		}
+
+		expectedAuth(t, auth)
+
+		require.NotEqualf(t, auth, previousAuth, "token endpoint called twice")
 		previousAuth = auth
 		res, _ := json.Marshal(oauth2TestServerResponse{
 			AccessToken: "12345",
@@ -1575,9 +1825,7 @@ func newTestOAuthServer(t testing.TB, expectedAuth *string) testOAuthServer {
 	}))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer 12345" {
-			t.Fatalf("bad auth, expected %s, got %s", "Bearer 12345", auth)
-		}
+		require.Equalf(t, "Bearer 12345", auth, "bad auth, expected %s, got %s", "Bearer 12345", auth)
 		fmt.Fprintln(w, "Hello, client")
 	}))
 	return testOAuthServer{
@@ -1600,8 +1848,10 @@ func (s *testOAuthServer) close() {
 }
 
 func TestOAuth2(t *testing.T) {
-	var expectedAuth string
-	ts := newTestOAuthServer(t, &expectedAuth)
+	expectedAuth := new(string)
+	ts := newTestOAuthServer(t, func(t testing.TB, auth string) {
+		require.Equalf(t, *expectedAuth, auth, "bad auth, expected %s, got %s", *expectedAuth, auth)
+	})
 	defer ts.close()
 
 	yamlConfig := fmt.Sprintf(`
@@ -1623,81 +1873,59 @@ endpoint_params:
 	}
 
 	var unmarshalledConfig OAuth2
-	if err := yaml.Unmarshal([]byte(yamlConfig), &unmarshalledConfig); err != nil {
-		t.Fatalf("Expected no error unmarshalling yaml, got %v", err)
-	}
-	if !reflect.DeepEqual(unmarshalledConfig, expectedConfig) {
-		t.Fatalf("Got unmarshalled config %v, expected %v", unmarshalledConfig, expectedConfig)
-	}
+	err := yaml.Unmarshal([]byte(yamlConfig), &unmarshalledConfig)
+	require.NoErrorf(t, err, "Expected no error unmarshalling yaml, got %v", err)
+	require.Truef(t, reflect.DeepEqual(unmarshalledConfig, expectedConfig), "Got unmarshalled config %v, expected %v", unmarshalledConfig, expectedConfig)
 
-	rt := NewOAuth2RoundTripper(NewInlineSecret(string(expectedConfig.ClientSecret)), &expectedConfig, http.DefaultTransport, &defaultHTTPClientOptions)
+	secret := NewInlineSecret(string(expectedConfig.ClientSecret))
+	rt := NewOAuth2RoundTripper(secret, &expectedConfig, http.DefaultTransport)
 
 	client := http.Client{
 		Transport: rt,
 	}
 
 	// Default secret.
-	expectedAuth = "Basic MToy"
+	*expectedAuth = "Basic MToy"
 	resp, err := client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization := resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer', got '%s'", authorization)
-	}
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer', got '%s'", authorization)
 
 	// Making a second request with the same secret should not re-call the token API.
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Empty secret.
-	expectedAuth = "Basic MTo="
+	*expectedAuth = "Basic MTo="
 	expectedConfig.ClientSecret = ""
 	resp, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization = resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
-	}
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
 
 	// Making a second request with the same secret should not re-call the token API.
 	resp, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Update secret.
-	expectedAuth = "Basic MToxMjM0NTY3"
+	*expectedAuth = "Basic MToxMjM0NTY3"
 	expectedConfig.ClientSecret = "1234567"
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Making a second request with the same secret should not re-call the token API.
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization = resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
-	}
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
 }
 
 func TestOAuth2UserAgent(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("User-Agent") != "myuseragent" {
-			t.Fatalf("Expected User-Agent header in oauth request to be 'myuseragent', got '%s'", r.Header.Get("User-Agent"))
-		}
+		require.Equalf(t, "myuseragent", r.Header.Get("User-Agent"), "Expected User-Agent header in oauth request to be 'myuseragent', got '%s'", r.Header.Get("User-Agent"))
 
 		res, _ := json.Marshal(oauth2TestServerResponse{
 			AccessToken: "12345",
@@ -1714,33 +1942,59 @@ func TestOAuth2UserAgent(t *testing.T) {
 		ClientSecret:   "2",
 		Scopes:         []string{"A", "B"},
 		EndpointParams: map[string]string{"hi": "hello"},
-		TokenURL:       fmt.Sprintf("%s/token", ts.URL),
+		TokenURL:       ts.URL + "/token",
 	}
 
 	rt, err := NewRoundTripperFromConfig(config, "test_oauth2", WithUserAgent("myuseragent"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client := http.Client{
 		Transport: rt,
 	}
 	resp, err := client.Get(ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization := resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
+}
+
+func TestOAuth2DialContextFunc(t *testing.T) {
+	tokenServerInvoked := false
+	tokenTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tokenServerInvoked = true
+		res, _ := json.Marshal(oauth2TestServerResponse{
+			AccessToken: "12345",
+			TokenType:   "Bearer",
+		})
+		w.Header().Add("Content-Type", "application/json")
+		_, _ = w.Write(res)
+	}))
+	defer tokenTS.Close()
+
+	config := DefaultHTTPClientConfig
+	config.OAuth2 = &OAuth2{
+		ClientID:     "1",
+		ClientSecret: "2",
+		TokenURL:     tokenTS.URL + "/token",
 	}
+
+	dialFn := func(_ context.Context, _, _ string) (net.Conn, error) {
+		return nil, errors.New(ExpectedError)
+	}
+
+	rt, err := NewRoundTripperFromConfig(config, "test_oauth2_dialctx", WithDialContextFunc(dialFn))
+	require.NoError(t, err)
+
+	client := http.Client{Transport: rt}
+	_, err = client.Get(tokenTS.URL)
+	require.Error(t, err)
+	require.Containsf(t, err.Error(), ExpectedError, "expected error from DialContextFunc, got: %v", err)
+	require.Falsef(t, tokenServerInvoked, "OAuth2 token endpoint must not be reached when DialContextFunc blocks")
 }
 
 func TestHost(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "localhost.localdomain" {
-			t.Fatalf("Expected Host header in request to be 'localhost.localdomain', got '%s'", r.Host)
-		}
+		require.Equalf(t, "localhost.localdomain", r.Host, "Expected Host header in request to be 'localhost.localdomain', got '%s'", r.Host)
 
 		w.Header().Add("Content-Type", "application/json")
 	}))
@@ -1749,28 +2003,24 @@ func TestHost(t *testing.T) {
 	config := DefaultHTTPClientConfig
 
 	rt, err := NewRoundTripperFromConfig(config, "test_host", WithHost("localhost.localdomain"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	client := http.Client{
 		Transport: rt,
 	}
 	_, err = client.Get(ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 func TestOAuth2WithFile(t *testing.T) {
-	var expectedAuth string
-	ts := newTestOAuthServer(t, &expectedAuth)
+	expectedAuth := new(string)
+	ts := newTestOAuthServer(t, func(t testing.TB, auth string) {
+		require.Equalf(t, *expectedAuth, auth, "bad auth, expected %s, got %s", *expectedAuth, auth)
+	})
 	defer ts.close()
 
 	secretFile, err := os.CreateTemp("", "oauth2_secret")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer os.Remove(secretFile.Name())
 
 	yamlConfig := fmt.Sprintf(`
@@ -1793,122 +2043,161 @@ endpoint_params:
 
 	var unmarshalledConfig OAuth2
 	err = yaml.Unmarshal([]byte(yamlConfig), &unmarshalledConfig)
-	if err != nil {
-		t.Fatalf("Expected no error unmarshalling yaml, got %v", err)
-	}
-	if !reflect.DeepEqual(unmarshalledConfig, expectedConfig) {
-		t.Fatalf("Got unmarshalled config %v, expected %v", unmarshalledConfig, expectedConfig)
-	}
+	require.NoErrorf(t, err, "Expected no error unmarshalling yaml, got %v", err)
+	require.Truef(t, reflect.DeepEqual(unmarshalledConfig, expectedConfig), "Got unmarshalled config %v, expected %v", unmarshalledConfig, expectedConfig)
 
-	rt := NewOAuth2RoundTripper(NewInlineSecret(string(expectedConfig.ClientSecret)), &expectedConfig, http.DefaultTransport, &defaultHTTPClientOptions)
+	secret := NewFileSecret(expectedConfig.ClientSecretFile)
+	rt := NewOAuth2RoundTripper(secret, &expectedConfig, http.DefaultTransport)
 
 	client := http.Client{
 		Transport: rt,
 	}
 
 	// Empty secret file.
-	expectedAuth = "Basic MTo="
+	*expectedAuth = "Basic MTo="
 	resp, err := client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization := resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer', got '%s'", authorization)
-	}
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer', got '%s'", authorization)
 
 	// Making a second request with the same file content should not re-call the token API.
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// File populated.
-	expectedAuth = "Basic MToxMjM0NTY="
-	if _, err := secretFile.Write([]byte("123456")); err != nil {
-		t.Fatal(err)
-	}
+	*expectedAuth = "Basic MToxMjM0NTY="
+	_, err = secretFile.Write([]byte("123456"))
+	require.NoError(t, err)
 	resp, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization = resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
-	}
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
 
 	// Making a second request with the same file content should not re-call the token API.
 	resp, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Update file.
-	expectedAuth = "Basic MToxMjM0NTY3"
-	if _, err := secretFile.Write([]byte("7")); err != nil {
-		t.Fatal(err)
-	}
+	*expectedAuth = "Basic MToxMjM0NTY3"
+	_, err = secretFile.Write([]byte("7"))
+	require.NoError(t, err)
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// Making a second request with the same file content should not re-call the token API.
 	_, err = client.Get(ts.url())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	authorization = resp.Request.Header.Get("Authorization")
-	if authorization != "Bearer 12345" {
-		t.Fatalf("Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer 12345', got '%s'", authorization)
+}
+
+func TestOAuth2WithJWTAuth(t *testing.T) {
+	ts := newTestOAuthServer(t, func(t testing.TB, auth string) {
+		t.Helper()
+
+		jwtParts := strings.Split(auth, ".")
+		require.Lenf(t, jwtParts, 3, "Expected JWT to have 3 parts, got %d", len(jwtParts))
+
+		// Decode the JWT payload.
+		payload, err := base64.RawURLEncoding.DecodeString(jwtParts[1])
+		require.NoErrorf(t, err, "Failed to decode JWT payload: %v", err)
+
+		var jwt struct {
+			Aud     string `json:"aud"`
+			Scope   string `json:"scope"`
+			Sub     string `json:"sub"`
+			Iss     string `json:"iss"`
+			Integer int    `json:"integer"`
+		}
+
+		err = json.Unmarshal(payload, &jwt)
+		require.NoErrorf(t, err, "Failed to unmarshal JWT payload: %v", err)
+
+		require.Equalf(t, "common-test", jwt.Aud, "Expected aud to be 'common-test', got '%s'", jwt.Aud)
+		require.Equalf(t, "A B", jwt.Scope, "Expected scope to be 'A B', got '%s'", jwt.Scope)
+		require.Equalf(t, "common", jwt.Sub, "Expected sub to be 'common', got '%s'", jwt.Sub)
+		require.Equalf(t, "https://example.com", jwt.Iss, "Expected iss to be 'https://example.com', got '%s'", jwt.Iss)
+		require.Equalf(t, 1, jwt.Integer, "Expected integer to be 1, got '%d'", jwt.Integer)
+	})
+	defer ts.close()
+
+	yamlConfig := fmt.Sprintf(`
+grant_type: urn:ietf:params:oauth:grant-type:jwt-bearer
+client_id: 1
+client_certificate_key_file: %s
+scopes:
+ - A
+ - B
+claims:
+  iss: "https://example.com"
+  aud: common-test
+  sub: common
+  integer: 1
+token_url: %s
+endpoint_params:
+  hi: hello
+`, ClientKeyNoPassPath, ts.tokenURL())
+	expectedConfig := OAuth2{
+		GrantType:                grantTypeJWTBearer,
+		ClientID:                 "1",
+		ClientCertificateKeyFile: ClientKeyNoPassPath,
+		Scopes:                   []string{"A", "B"},
+		TokenURL:                 ts.tokenURL(),
+		EndpointParams:           map[string]string{"hi": "hello"},
+		Claims: map[string]any{
+			"iss":     "https://example.com",
+			"aud":     "common-test",
+			"sub":     "common",
+			"integer": 1,
+		},
 	}
+
+	var unmarshalledConfig OAuth2
+	err := yaml.Unmarshal([]byte(yamlConfig), &unmarshalledConfig)
+	require.NoErrorf(t, err, "Expected no error unmarshalling yaml, got %v", err)
+	require.Truef(t, reflect.DeepEqual(unmarshalledConfig, expectedConfig), "Got unmarshalled config %v, expected %v", unmarshalledConfig, expectedConfig)
+
+	clientCertificateKey := NewFileSecret(expectedConfig.ClientCertificateKeyFile)
+	rt := NewOAuth2RoundTripper(clientCertificateKey, &expectedConfig, http.DefaultTransport)
+
+	client := http.Client{
+		Transport: rt,
+	}
+
+	resp, err := client.Get(ts.url())
+	require.NoError(t, err)
+
+	authorization := resp.Request.Header.Get("Authorization")
+	require.Equalf(t, "Bearer 12345", authorization, "Expected authorization header to be 'Bearer', got '%s'", authorization)
 }
 
 func TestMarshalURL(t *testing.T) {
 	urlp, err := url.Parse("http://example.com/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	u := &URL{urlp}
 
 	c, err := json.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(c) != "\"http://example.com/\"" {
-		t.Fatalf("URL not properly marshaled in JSON got '%s'", string(c))
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "\"http://example.com/\"", string(c), "URL not properly marshaled in JSON got '%s'", string(c))
 
 	c, err = yaml.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(c) != "http://example.com/\n" {
-		t.Fatalf("URL not properly marshaled in YAML got '%s'", string(c))
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "http://example.com/\n", string(c), "URL not properly marshaled in YAML got '%s'", string(c))
 }
 
 func TestMarshalURLWrapperWithNilValue(t *testing.T) {
 	u := &URL{}
 
 	c, err := json.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(c) != "null" {
-		t.Fatalf("URL with nil value not properly marshaled into JSON, got %q", c)
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "null", string(c), "URL with nil value not properly marshaled into JSON, got %q", c)
 
 	c, err = yaml.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(c) != "null\n" {
-		t.Fatalf("URL with nil value not properly marshaled into JSON, got %q", c)
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "null\n", string(c), "URL with nil value not properly marshaled into JSON, got %q", c)
 }
 
 func TestUnmarshalNullURL(t *testing.T) {
@@ -1917,23 +2206,16 @@ func TestUnmarshalNullURL(t *testing.T) {
 	{
 		var u URL
 		err := json.Unmarshal(b, &u)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !isEmptyNonNilURL(u.URL) {
-			t.Fatalf("`null` literal not properly unmarshaled from JSON as URL, got %#v", u.URL)
-		}
+		require.NoError(t, err)
+		require.Truef(t, isEmptyNonNilURL(u.URL), "`null` literal not properly unmarshaled from JSON as URL, got %#v", u.URL)
 	}
 
 	{
 		var u URL
 		err := yaml.Unmarshal(b, &u)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if u.URL != nil { // UnmarshalYAML is not called when parsing null literal.
-			t.Fatalf("`null` literal not properly unmarshaled from YAML as URL, got %#v", u.URL)
-		}
+		require.NoError(t, err)
+		// UnmarshalYAML is not called when parsing null literal.
+		require.Nilf(t, u.URL, "`null` literal not properly unmarshaled from YAML as URL, got %#v", u.URL)
 	}
 }
 
@@ -1943,27 +2225,19 @@ func TestUnmarshalEmptyURL(t *testing.T) {
 	{
 		var u URL
 		err := json.Unmarshal(b, &u)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !isEmptyNonNilURL(u.URL) {
-			t.Fatalf("empty string not properly unmarshaled from JSON as URL, got %#v", u.URL)
-		}
+		require.NoError(t, err)
+		require.Truef(t, isEmptyNonNilURL(u.URL), "empty string not properly unmarshaled from JSON as URL, got %#v", u.URL)
 	}
 
 	{
 		var u URL
 		err := yaml.Unmarshal(b, &u)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !isEmptyNonNilURL(u.URL) {
-			t.Fatalf("empty string not properly unmarshaled from YAML as URL, got %#v", u.URL)
-		}
+		require.NoError(t, err)
+		require.Truef(t, isEmptyNonNilURL(u.URL), "empty string not properly unmarshaled from YAML as URL, got %#v", u.URL)
 	}
 }
 
-// checks if u equals to &url.URL{}
+// checks if u equals to &url.URL{}.
 func isEmptyNonNilURL(u *url.URL) bool {
 	return u != nil && *u == url.URL{}
 }
@@ -1973,36 +2247,22 @@ func TestUnmarshalURL(t *testing.T) {
 	var u URL
 
 	err := json.Unmarshal(b, &u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.String() != "http://example.com/a%20b" {
-		t.Fatalf("URL not properly unmarshaled in JSON, got '%s'", u.String())
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "http://example.com/a%20b", u.String(), "URL not properly unmarshaled in JSON, got '%s'", u.String())
 
 	err = yaml.Unmarshal(b, &u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if u.String() != "http://example.com/a%20b" {
-		t.Fatalf("URL not properly unmarshaled in YAML, got '%s'", u.String())
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "http://example.com/a%20b", u.String(), "URL not properly unmarshaled in YAML, got '%s'", u.String())
 }
 
 func TestMarshalURLWithSecret(t *testing.T) {
 	var u URL
 	err := yaml.Unmarshal([]byte("http://foo:bar@example.com"), &u)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	b, err := yaml.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(b)) != "http://foo:xxxxx@example.com" {
-		t.Fatalf("URL not properly marshaled in YAML, got '%s'", string(b))
-	}
+	require.NoError(t, err)
+	require.Equalf(t, "http://foo:xxxxx@example.com", strings.TrimSpace(string(b)), "URL not properly marshaled in YAML, got '%s'", string(b))
 }
 
 func TestHTTPClientConfig_Marshal(t *testing.T) {
@@ -2099,19 +2359,15 @@ func TestModifyTLSCertificates(t *testing.T) {
 	bs := getCertificateBlobs(t)
 
 	tmpDir, err := os.MkdirTemp("", "modifytlscertificates")
-	if err != nil {
-		t.Fatal("Failed to create tmp dir", err)
-	}
+	require.NoErrorf(t, err, "Failed to create tmp dir")
 	defer os.RemoveAll(tmpDir)
 	ca, cert, key := filepath.Join(tmpDir, "ca"), filepath.Join(tmpDir, "cert"), filepath.Join(tmpDir, "key")
 
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, ExpectedMessage)
 	}
 	testServer, err := newTestServer(handler)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
+	require.NoError(t, err)
 	defer testServer.Close()
 
 	tests := []struct {
@@ -2169,31 +2425,23 @@ func TestModifyTLSCertificates(t *testing.T) {
 			writeCertificate(bs, tc.key, key)
 			if c == nil {
 				c, err = NewClientFromConfig(cfg, "test")
-				if err != nil {
-					t.Fatalf("Error creating HTTP Client: %v", err)
-				}
+				require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 			}
 
 			req, err := http.NewRequest(http.MethodGet, testServer.URL, nil)
-			if err != nil {
-				t.Fatalf("Error creating HTTP request: %v", err)
-			}
+			require.NoErrorf(t, err, "Error creating HTTP request: %v", err)
 
 			r, err := c.Do(req)
 			if err == nil {
 				r.Body.Close()
 				t.Fatalf("Could connect to the test server.")
 			}
-			if !strings.Contains(err.Error(), tc.errMsg) {
-				t.Fatalf("Expected error message to contain %q, got %q", tc.errMsg, err)
-			}
+			require.ErrorContainsf(t, err, tc.errMsg, "Expected error message to contain %q, got %q", tc.errMsg, err)
 
 			tc.modification()
 
 			r, err = c.Do(req)
-			if err != nil {
-				t.Fatalf("Expected no error, got %q", err)
-			}
+			require.NoErrorf(t, err, "Expected no error, got %q", err)
 
 			b, err := io.ReadAll(r.Body)
 			r.Body.Close()
@@ -2207,6 +2455,54 @@ func TestModifyTLSCertificates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTLSRoundTripper_NoCAConfigured verifies that client cert rotation works
+// when no ca_file is configured. Regression test for prometheus/prometheus#16622.
+func TestTLSRoundTripper_NoCAConfigured(t *testing.T) {
+	bs := getCertificateBlobs(t)
+
+	tmpDir, err := os.MkdirTemp("", "tlsnocacert")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+	cert, key := filepath.Join(tmpDir, "cert"), filepath.Join(tmpDir, "key")
+
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, ExpectedMessage)
+	}
+	testServer, err := newTestServer(handler)
+	require.NoError(t, err)
+	defer testServer.Close()
+
+	cfg := HTTPClientConfig{
+		TLSConfig: TLSConfig{
+			CertFile:           cert,
+			KeyFile:            key,
+			InsecureSkipVerify: true,
+		},
+	}
+
+	writeCertificate(bs, ClientCertificatePath, cert)
+	writeCertificate(bs, ClientKeyNoPassPath, key)
+	c, err := NewClientFromConfig(cfg, "test")
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodGet, testServer.URL, nil)
+	require.NoError(t, err)
+
+	r, err := c.Do(req)
+	require.NoErrorf(t, err, "request should succeed before cert rotation")
+	r.Body.Close()
+
+	// Rotate the cert/key files to different (but still valid) certs.
+	// Tthe next RoundTrip should rebuild the transport.
+	writeCertificate(bs, ServerCertificatePath, cert)
+	writeCertificate(bs, ServerKeyPath, key)
+
+	// The request still succeeds after cert rotation.
+	r, err = c.Do(req)
+	require.NoErrorf(t, err, "request should succeed after cert rotation without ca_file")
+	r.Body.Close()
 }
 
 // loadHTTPConfigJSON parses the JSON input s into a HTTPClientConfig.
@@ -2279,7 +2575,7 @@ func TestProxyConfig_Proxy(t *testing.T) {
 		},
 		{
 			name:             "valid proxy_url and localhost",
-			proxyConfig:      fmt.Sprintf(`proxy_url: %s`, proxyServer.URL),
+			proxyConfig:      "proxy_url: " + proxyServer.URL,
 			expectedProxyURL: proxyServer.URL,
 			targetURL:        "http://localhost/",
 		},
@@ -2292,7 +2588,7 @@ no_proxy: prometheus.io`, proxyServer.URL),
 		},
 		{
 			name:             "valid proxy_url",
-			proxyConfig:      fmt.Sprintf(`proxy_url: %s`, proxyServer.URL),
+			proxyConfig:      "proxy_url: " + proxyServer.URL,
 			expectedProxyURL: proxyServer.URL,
 			targetURL:        "http://prometheus.io/",
 		},
@@ -2345,7 +2641,7 @@ no_proxy: promcon.io,cncf.io`, proxyServer.URL),
 				os.Setenv("NO_PROXY", tc.noProxyEnv)
 			}
 
-			req := httptest.NewRequest("GET", tc.targetURL, nil)
+			req := httptest.NewRequest(http.MethodGet, tc.targetURL, nil)
 
 			proxyFunc := proxyConfig.Proxy()
 			resultURL, err := proxyFunc(req)
@@ -2372,9 +2668,7 @@ func readFile(t *testing.T, filename string) string {
 	t.Helper()
 
 	content, err := os.ReadFile(filename)
-	if err != nil {
-		t.Fatalf("Failed to read file %q: %s", filename, err)
-	}
+	require.NoErrorf(t, err, "Failed to read file %q: %s", filename, err)
 
 	return string(content)
 }
@@ -2395,18 +2689,12 @@ func TestHeaders(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.headers.good.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	_, err = client.Get(ts.URL)
-	if err != nil {
-		t.Fatalf("can't fetch URL: %v", err)
-	}
+	require.NoErrorf(t, err, "can't fetch URL: %v", err)
 }
 
 func TestMultipleHeaders(t *testing.T) {
@@ -2425,16 +2713,39 @@ func TestMultipleHeaders(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	cfg, _, err := LoadHTTPConfigFile("testdata/http.conf.headers-multiple.good.yaml")
-	if err != nil {
-		t.Fatalf("Error loading HTTP client config: %v", err)
-	}
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
 	client, err := NewClientFromConfig(*cfg, "test")
-	if err != nil {
-		t.Fatalf("Error creating HTTP Client: %v", err)
-	}
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
 
 	_, err = client.Get(ts.URL)
-	if err != nil {
-		t.Fatalf("can't fetch URL: %v", err)
-	}
+	require.NoErrorf(t, err, "can't fetch URL: %v", err)
+}
+
+// TestLoadHTTPConfigFileResolvesPathsRelativeToConfigFile ensures that relative
+// file paths inside a config loaded with LoadHTTPConfigFile are resolved
+// relative to the directory containing the config file, as documented by the
+// SetDirectory contract.
+func TestLoadHTTPConfigFileResolvesPathsRelativeToConfigFile(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "header-value", r.Header.Get("X-Test"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ts.Close)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "header-value"), []byte("header-value\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "http.yml"), []byte(`http_headers:
+  X-Test:
+    files: [header-value]
+`), 0o644))
+
+	cfg, _, err := LoadHTTPConfigFile(filepath.Join(dir, "http.yml"))
+	require.NoErrorf(t, err, "Error loading HTTP client config: %v", err)
+	require.Equal(t, filepath.Join(dir, "header-value"), cfg.HTTPHeaders.Headers["X-Test"].Files[0])
+
+	client, err := NewClientFromConfig(*cfg, "test")
+	require.NoErrorf(t, err, "Error creating HTTP Client: %v", err)
+
+	_, err = client.Get(ts.URL)
+	require.NoErrorf(t, err, "can't fetch URL: %v", err)
 }

@@ -20,10 +20,9 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	dto "github.com/prometheus/client_model/go"
 
 	"github.com/prometheus/common/model"
 )
@@ -399,7 +398,7 @@ summary_name_created{name_1="value 1",name_2="value 2"} 12345.6
 					},
 				},
 			},
-			options: []EncoderOption{WithCreatedLines(), WithUnit()},
+			options: []EncoderOption{WithCreatedLines()},
 			out: `# HELP request_duration_microseconds The response latency.
 # TYPE request_duration_microseconds histogram
 # UNIT request_duration_microseconds microseconds
@@ -449,6 +448,7 @@ request_duration_microseconds_created 12345.6
 			},
 			out: `# HELP request_duration_microseconds The response latency.
 # TYPE request_duration_microseconds histogram
+# UNIT request_duration_microseconds microseconds
 request_duration_microseconds_bucket{le="100.0"} 123
 request_duration_microseconds_bucket{le="120.0"} 412
 request_duration_microseconds_bucket{le="144.0"} 592
@@ -613,13 +613,12 @@ foos_total 42.0
 				Unit:   proto.String("seconds"),
 				Metric: []*dto.Metric{},
 			},
-			options: []EncoderOption{WithUnit()},
 			out: `# HELP name_seconds doc string
 # TYPE name_seconds counter
 # UNIT name_seconds seconds
 `,
 		},
-		// 15: Histogram plus unit, but unit not opted in.
+		// 15: Histogram plus unit
 		{
 			in: &dto.MetricFamily{
 				Name: proto.String("request_duration_microseconds"),
@@ -659,6 +658,7 @@ foos_total 42.0
 			},
 			out: `# HELP request_duration_microseconds The response latency.
 # TYPE request_duration_microseconds histogram
+# UNIT request_duration_microseconds microseconds
 request_duration_microseconds_bucket{le="100.0"} 123
 request_duration_microseconds_bucket{le="120.0"} 412
 request_duration_microseconds_bucket{le="144.0"} 592
@@ -668,35 +668,7 @@ request_duration_microseconds_sum 1.7560473e+06
 request_duration_microseconds_count 2693
 `,
 		},
-		// 16: No metric, unit opted in, no unit in name.
-		{
-			in: &dto.MetricFamily{
-				Name:   proto.String("name_total"),
-				Help:   proto.String("doc string"),
-				Type:   dto.MetricType_COUNTER.Enum(),
-				Unit:   proto.String("seconds"),
-				Metric: []*dto.Metric{},
-			},
-			options: []EncoderOption{WithUnit()},
-			out: `# HELP name_seconds doc string
-# TYPE name_seconds counter
-# UNIT name_seconds seconds
-`,
-		},
-		// 17: No metric, unit opted in, BUT unit == nil.
-		{
-			in: &dto.MetricFamily{
-				Name:   proto.String("name_total"),
-				Help:   proto.String("doc string"),
-				Type:   dto.MetricType_COUNTER.Enum(),
-				Metric: []*dto.Metric{},
-			},
-			options: []EncoderOption{WithUnit()},
-			out: `# HELP name doc string
-# TYPE name counter
-`,
-		},
-		// 18: Counter, timestamp given, unit opted in, _total suffix.
+		// 16: Counter, timestamp given, unit given, _total suffix.
 		{
 			in: &dto.MetricFamily{
 				Name: proto.String("some_measure_total"),
@@ -737,12 +709,55 @@ request_duration_microseconds_count 2693
 					},
 				},
 			},
-			options: []EncoderOption{WithUnit()},
-			out: `# HELP some_measure_seconds some testing measurement
-# TYPE some_measure_seconds counter
-# UNIT some_measure_seconds seconds
-some_measure_seconds_total{labelname="val1",basename="basevalue"} 42.0
-some_measure_seconds_total{labelname="val2",basename="basevalue"} 0.23 1.23456789e+06
+			out: `# HELP some_measure some testing measurement
+# TYPE some_measure counter
+# UNIT some_measure seconds
+some_measure_total{labelname="val1",basename="basevalue"} 42.0
+some_measure_total{labelname="val2",basename="basevalue"} 0.23 1.23456789e+06
+`,
+		},
+		// 17: Gauge histogram.
+		{
+			in: &dto.MetricFamily{
+				Name: proto.String("name"),
+				Help: proto.String("doc string"),
+				Type: dto.MetricType_GAUGE_HISTOGRAM.Enum(),
+				Metric: []*dto.Metric{
+					{
+						Histogram: &dto.Histogram{
+							SampleCount: proto.Uint64(2693),
+							SampleSum:   proto.Float64(1756047.3),
+							Bucket: []*dto.Bucket{
+								{
+									UpperBound:      proto.Float64(100),
+									CumulativeCount: proto.Uint64(123),
+								},
+								{
+									UpperBound:      proto.Float64(120),
+									CumulativeCount: proto.Uint64(412),
+								},
+								{
+									UpperBound:      proto.Float64(144),
+									CumulativeCount: proto.Uint64(592),
+								},
+								{
+									UpperBound:      proto.Float64(172.8),
+									CumulativeCount: proto.Uint64(1524),
+								},
+							},
+						},
+					},
+				},
+			},
+			out: `# HELP name doc string
+# TYPE name gaugehistogram
+name_bucket{le="100.0"} 123
+name_bucket{le="120.0"} 412
+name_bucket{le="144.0"} 592
+name_bucket{le="172.8"} 1524
+name_bucket{le="+Inf"} 2693
+name_sum 1.7560473e+06
+name_count 2693
 `,
 		},
 	}
@@ -766,106 +781,6 @@ some_measure_seconds_total{labelname="val2",basename="basevalue"} 0.23 1.2345678
 				i, expected, got,
 			)
 		}
-	}
-}
-
-func BenchmarkOpenMetricsCreate(b *testing.B) {
-	mf := &dto.MetricFamily{
-		Name: proto.String("request_duration_microseconds"),
-		Help: proto.String("The response latency."),
-		Type: dto.MetricType_HISTOGRAM.Enum(),
-		Metric: []*dto.Metric{
-			{
-				Label: []*dto.LabelPair{
-					{
-						Name:  proto.String("name_1"),
-						Value: proto.String("val with\nnew line"),
-					},
-					{
-						Name:  proto.String("name_2"),
-						Value: proto.String("val with \\backslash and \"quotes\""),
-					},
-					{
-						Name:  proto.String("name_3"),
-						Value: proto.String("Just a quite long label value to test performance."),
-					},
-				},
-				Histogram: &dto.Histogram{
-					SampleCount: proto.Uint64(2693),
-					SampleSum:   proto.Float64(1756047.3),
-					Bucket: []*dto.Bucket{
-						{
-							UpperBound:      proto.Float64(100),
-							CumulativeCount: proto.Uint64(123),
-						},
-						{
-							UpperBound:      proto.Float64(120),
-							CumulativeCount: proto.Uint64(412),
-						},
-						{
-							UpperBound:      proto.Float64(144),
-							CumulativeCount: proto.Uint64(592),
-						},
-						{
-							UpperBound:      proto.Float64(172.8),
-							CumulativeCount: proto.Uint64(1524),
-						},
-						{
-							UpperBound:      proto.Float64(math.Inf(+1)),
-							CumulativeCount: proto.Uint64(2693),
-						},
-					},
-				},
-			},
-			{
-				Label: []*dto.LabelPair{
-					{
-						Name:  proto.String("name_1"),
-						Value: proto.String("Björn"),
-					},
-					{
-						Name:  proto.String("name_2"),
-						Value: proto.String("佖佥"),
-					},
-					{
-						Name:  proto.String("name_3"),
-						Value: proto.String("Just a quite long label value to test performance."),
-					},
-				},
-				Histogram: &dto.Histogram{
-					SampleCount: proto.Uint64(5699),
-					SampleSum:   proto.Float64(49484343543.4343),
-					Bucket: []*dto.Bucket{
-						{
-							UpperBound:      proto.Float64(100),
-							CumulativeCount: proto.Uint64(120),
-						},
-						{
-							UpperBound:      proto.Float64(120),
-							CumulativeCount: proto.Uint64(412),
-						},
-						{
-							UpperBound:      proto.Float64(144),
-							CumulativeCount: proto.Uint64(596),
-						},
-						{
-							UpperBound:      proto.Float64(172.8),
-							CumulativeCount: proto.Uint64(1535),
-						},
-					},
-				},
-				TimestampMs: proto.Int64(1234567890),
-			},
-		},
-	}
-	out := bytes.NewBuffer(make([]byte, 0, 1024))
-
-	for i := 0; i < b.N; i++ {
-		_, err := MetricFamilyToOpenMetrics(out, mf)
-		if err != nil {
-			b.Fatal(err)
-		}
-		out.Reset()
 	}
 }
 
@@ -904,6 +819,47 @@ func TestOpenMetricsCreateError(t *testing.T) {
 				},
 			},
 			err: "expected counter in metric",
+		},
+		// 2: Float histogram.
+		{
+			in: &dto.MetricFamily{
+				Name: proto.String("name"),
+				Help: proto.String("doc string"),
+				Type: dto.MetricType_GAUGE_HISTOGRAM.Enum(),
+				Metric: []*dto.Metric{
+					{
+						Histogram: &dto.Histogram{
+							// Note that it is enough to fill the float fields even
+							// if the values are integers.
+							SampleCountFloat: proto.Float64(2693),
+							SampleSum:        proto.Float64(1756047.3),
+							Bucket: []*dto.Bucket{
+								{
+									UpperBound:           proto.Float64(100),
+									CumulativeCountFloat: proto.Float64(123),
+								},
+								{
+									UpperBound:           proto.Float64(120),
+									CumulativeCountFloat: proto.Float64(412),
+								},
+								{
+									UpperBound:           proto.Float64(144),
+									CumulativeCountFloat: proto.Float64(592),
+								},
+								{
+									UpperBound:           proto.Float64(172.8),
+									CumulativeCountFloat: proto.Float64(1524),
+								},
+								{
+									UpperBound:           proto.Float64(math.Inf(+1)),
+									CumulativeCountFloat: proto.Float64(2693),
+								},
+							},
+						},
+					},
+				},
+			},
+			err: "OpenMetrics v1.0 does not support float histogram name histogram",
 		},
 	}
 

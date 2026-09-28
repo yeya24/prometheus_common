@@ -14,13 +14,27 @@
 package model
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v2"
 	"google.golang.org/protobuf/proto"
 )
+
+var _ interface {
+	yaml.Marshaler
+	yaml.Unmarshaler
+	json.Marshaler
+	json.Unmarshaler
+	fmt.Stringer
+} = new(ValidationScheme)
 
 func testMetric(t testing.TB) {
 	scenarios := []struct {
@@ -89,9 +103,206 @@ func BenchmarkMetric(b *testing.B) {
 	}
 }
 
-func TestMetricNameIsLegacyValid(t *testing.T) {
+func TestValidationScheme(t *testing.T) {
+	var scheme ValidationScheme
+	require.Equal(t, UnsetValidation, scheme)
+}
+
+func TestValidationScheme_String(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		scheme ValidationScheme
+		want   string
+	}{
+		{
+			name:   "Unset",
+			scheme: UnsetValidation,
+			want:   "unset",
+		},
+		{
+			name:   "Legacy",
+			scheme: LegacyValidation,
+			want:   "legacy",
+		},
+		{
+			name:   "UTF8",
+			scheme: UTF8Validation,
+			want:   "utf8",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.scheme.String())
+		})
+	}
+}
+
+func TestValidationScheme_MarshalYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		scheme ValidationScheme
+		want   string
+	}{
+		{
+			name:   "Unset",
+			scheme: UnsetValidation,
+			want:   `""`,
+		},
+		{
+			name:   "Legacy",
+			scheme: LegacyValidation,
+			want:   "legacy",
+		},
+		{
+			name:   "UTF8",
+			scheme: UTF8Validation,
+			want:   "utf8",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marshaled, err := yaml.Marshal(tc.scheme)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, strings.TrimSpace(string(marshaled)))
+		})
+	}
+}
+
+func TestValidationScheme_UnmarshalYAML(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		input     string
+		want      ValidationScheme
+		wantError error
+	}{
+		{
+			name:  "Unset empty input",
+			input: "",
+			want:  UnsetValidation,
+		},
+		{
+			name:  "Unset quoted input",
+			input: `""`,
+			want:  UnsetValidation,
+		},
+		{
+			name:  "Legacy",
+			input: "legacy",
+			want:  LegacyValidation,
+		},
+		{
+			name:  "UTF8",
+			input: "utf8",
+			want:  UTF8Validation,
+		},
+		{
+			name:      "Invalid",
+			input:     "invalid",
+			wantError: errors.New(`unrecognized ValidationScheme: "invalid"`),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := UnsetValidation
+			err := yaml.Unmarshal([]byte(tc.input), &scheme)
+			if tc.wantError == nil {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, scheme)
+			} else {
+				require.EqualError(t, err, tc.wantError.Error())
+			}
+		})
+	}
+}
+
+func TestValidationScheme_UnmarshalJSON(t *testing.T) {
+	testCases := []struct {
+		name    string
+		input   string
+		want    ValidationScheme
+		wantErr bool
+	}{
+		{
+			name:    "invalid",
+			input:   `invalid`,
+			wantErr: true,
+		},
+		{
+			name:  "empty",
+			input: `""`,
+			want:  UnsetValidation,
+		},
+		{
+			name:  "legacy validation",
+			input: `"legacy"`,
+			want:  LegacyValidation,
+		},
+		{
+			name:  "utf8 validation",
+			input: `"utf8"`,
+			want:  UTF8Validation,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got ValidationScheme
+			err := json.Unmarshal([]byte(tc.input), &got)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+
+			output, err := json.Marshal(got)
+			require.NoError(t, err)
+			require.Equal(t, tc.input, string(output))
+		})
+	}
+}
+
+func TestValidationScheme_Set(t *testing.T) {
+	testCases := []struct {
+		name    string
+		input   string
+		want    ValidationScheme
+		wantErr bool
+	}{
+		{
+			name:    "invalid",
+			input:   `invalid`,
+			wantErr: true,
+		},
+		{
+			name:  "empty",
+			input: ``,
+			want:  UnsetValidation,
+		},
+		{
+			name:  "legacy validation",
+			input: `legacy`,
+			want:  LegacyValidation,
+		},
+		{
+			name:  "utf8 validation",
+			input: `utf8`,
+			want:  UTF8Validation,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got ValidationScheme
+			err := got.Set(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestValidationScheme_IsMetricNameValid(t *testing.T) {
 	scenarios := []struct {
-		mn          LabelValue
+		mn          string
 		legacyValid bool
 		utf8Valid   bool
 	}{
@@ -145,20 +356,41 @@ func TestMetricNameIsLegacyValid(t *testing.T) {
 			legacyValid: false,
 			utf8Valid:   false,
 		},
+		{
+			mn:          "dot.in.name",
+			legacyValid: false,
+			utf8Valid:   true,
+		},
 	}
-
 	for _, s := range scenarios {
-		NameValidationScheme = LegacyValidation
-		if IsValidMetricName(s.mn) != s.legacyValid {
-			t.Errorf("Expected %v for %q using legacy IsValidMetricName method", s.legacyValid, s.mn)
-		}
-		if MetricNameRE.MatchString(string(s.mn)) != s.legacyValid {
-			t.Errorf("Expected %v for %q using regexp matching", s.legacyValid, s.mn)
-		}
-		NameValidationScheme = UTF8Validation
-		if IsValidMetricName(s.mn) != s.utf8Valid {
-			t.Errorf("Expected %v for %q using utf-8 IsValidMetricName method", s.legacyValid, s.mn)
-		}
+		t.Run(fmt.Sprintf("%s,%t,%t", s.mn, s.legacyValid, s.utf8Valid), func(t *testing.T) {
+			if LegacyValidation.IsValidMetricName(s.mn) != s.legacyValid {
+				t.Errorf("Expected %v for %q using LegacyValidation.IsValidMetricName", s.legacyValid, s.mn)
+			}
+			if MetricNameRE.MatchString(s.mn) != s.legacyValid {
+				t.Errorf("Expected %v for %q using regexp matching", s.legacyValid, s.mn)
+			}
+			if UTF8Validation.IsValidMetricName(s.mn) != s.utf8Valid {
+				t.Errorf("Expected %v for %q using UTF8Validation.IsValidMetricName", s.utf8Valid, s.mn)
+			}
+
+			// Test deprecated functions.
+			if IsValidLegacyMetricName(s.mn) != s.legacyValid {
+				t.Errorf("Expected %v for %q using IsValidLegacyMetricNames", s.legacyValid, s.mn)
+			}
+			origScheme := NameValidationScheme
+			t.Cleanup(func() {
+				NameValidationScheme = origScheme
+			})
+			NameValidationScheme = LegacyValidation
+			if IsValidMetricName(LabelValue(s.mn)) != s.legacyValid {
+				t.Errorf("Expected %v for %q using legacy IsValidMetricName", s.legacyValid, s.mn)
+			}
+			NameValidationScheme = UTF8Validation
+			if IsValidMetricName(LabelValue(s.mn)) != s.utf8Valid {
+				t.Errorf("Expected %v for %q using utf-8 IsValidMetricName method", s.utf8Valid, s.mn)
+			}
+		})
 	}
 }
 
@@ -262,6 +494,14 @@ func TestEscapeName(t *testing.T) {
 			expectedValue:         "U__mysystem_2e_prod_2e_west_2e_cpu_2e_load",
 		},
 		{
+			name:                  "name with dots and underscore",
+			input:                 "mysystem.prod.west.cpu.load_total",
+			expectedUnderscores:   "mysystem_prod_west_cpu_load_total",
+			expectedDots:          "mysystem_dot_prod_dot_west_dot_cpu_dot_load__total",
+			expectedUnescapedDots: "mysystem.prod.west.cpu.load_total",
+			expectedValue:         "U__mysystem_2e_prod_2e_west_2e_cpu_2e_load__total",
+		},
+		{
 			name:                  "name with dots and colon",
 			input:                 "http.status:sum",
 			expectedUnderscores:   "http_status:sum",
@@ -270,14 +510,30 @@ func TestEscapeName(t *testing.T) {
 			expectedValue:         "U__http_2e_status:sum",
 		},
 		{
+			name:                  "name with spaces and emoji",
+			input:                 "label with 😱",
+			expectedUnderscores:   "label_with__",
+			expectedDots:          "label__with____",
+			expectedUnescapedDots: "label_with__",
+			expectedValue:         "U__label_20_with_20__1f631_",
+		},
+		{
 			name:                "name with unicode characters > 0x100",
 			input:               "花火",
 			expectedUnderscores: "__",
-			expectedDots:        "__",
+			expectedDots:        "____",
 			// Dots-replacement does not know the difference between two replaced
 			// characters and a single underscore.
-			expectedUnescapedDots: "_",
+			expectedUnescapedDots: "__",
 			expectedValue:         "U___82b1__706b_",
+		},
+		{
+			name:                  "name with spaces and edge-case value",
+			input:                 "label with \u0100",
+			expectedUnderscores:   "label_with__",
+			expectedDots:          "label__with____",
+			expectedUnescapedDots: "label_with__",
+			expectedValue:         "U__label_20_with_20__100_",
 		},
 	}
 
@@ -564,7 +820,7 @@ func TestEscapeMetricFamily(t *testing.T) {
 				},
 			},
 			expected: &dto.MetricFamily{
-				Name: proto.String("unicode_dot_and_dot_dots_dot___"),
+				Name: proto.String("unicode_dot_and_dot_dots_dot_____"),
 				Help: proto.String("some help text"),
 				Type: dto.MetricType_GAUGE.Enum(),
 				Metric: []*dto.Metric{
@@ -575,7 +831,7 @@ func TestEscapeMetricFamily(t *testing.T) {
 						Label: []*dto.LabelPair{
 							{
 								Name:  proto.String("__name__"),
-								Value: proto.String("unicode_dot_and_dot_dots_dot___"),
+								Value: proto.String("unicode_dot_and_dot_dots_dot_____"),
 							},
 							{
 								Name:  proto.String("some_label"),
@@ -588,17 +844,17 @@ func TestEscapeMetricFamily(t *testing.T) {
 		},
 	}
 
-	unexportList := []interface{}{dto.MetricFamily{}, dto.Metric{}, dto.LabelPair{}, dto.Counter{}, dto.Gauge{}}
+	unexportList := []any{dto.MetricFamily{}, dto.Metric{}, dto.LabelPair{}, dto.Counter{}, dto.Gauge{}}
 
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			original := proto.Clone(scenario.input)
 			got := EscapeMetricFamily(scenario.input, scenario.scheme)
 			if !cmp.Equal(scenario.expected, got, cmpopts.IgnoreUnexported(unexportList...)) {
-				t.Errorf("unexpected difference in escaped output:" + cmp.Diff(scenario.expected, got, cmpopts.IgnoreUnexported(unexportList...)))
+				t.Errorf("unexpected difference in escaped output:\n%s", cmp.Diff(scenario.expected, got, cmpopts.IgnoreUnexported(unexportList...)))
 			}
 			if !cmp.Equal(scenario.input, original, cmpopts.IgnoreUnexported(unexportList...)) {
-				t.Errorf("input was mutated during escaping" + cmp.Diff(scenario.expected, got, cmpopts.IgnoreUnexported(unexportList...)))
+				t.Errorf("input was mutated during escaping:\n%s", cmp.Diff(scenario.expected, got, cmpopts.IgnoreUnexported(unexportList...)))
 			}
 		})
 	}

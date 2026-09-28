@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/prometheus/common/model"
@@ -79,7 +81,10 @@ mf2 4
 	)
 
 	dec := &SampleDecoder{
-		Dec: &textDecoder{r: strings.NewReader(in)},
+		Dec: &textDecoder{
+			s: model.UTF8Validation,
+			r: strings.NewReader(in),
+		},
 		Opts: &DecodeOptions{
 			Timestamp: ts,
 		},
@@ -91,16 +96,12 @@ mf2 4
 		if err != nil && errors.Is(err, io.EOF) {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		all = append(all, smpls...)
 	}
 	sort.Sort(all)
 	sort.Sort(out)
-	if !reflect.DeepEqual(all, out) {
-		t.Fatalf("output does not match")
-	}
+	require.Truef(t, reflect.DeepEqual(all, out), "output does not match")
 }
 
 func TestProtoDecoder(t *testing.T) {
@@ -364,7 +365,7 @@ func TestProtoDecoder(t *testing.T) {
 
 	for i, scenario := range scenarios {
 		dec := &SampleDecoder{
-			Dec: &protoDecoder{r: strings.NewReader(scenario.in)},
+			Dec: &protoDecoder{r: strings.NewReader(scenario.in), s: model.LegacyValidation},
 			Opts: &DecodeOptions{
 				Timestamp: testTime,
 			},
@@ -372,19 +373,15 @@ func TestProtoDecoder(t *testing.T) {
 
 		var all model.Vector
 		for {
-			model.NameValidationScheme = model.LegacyValidation
 			var smpls model.Vector
 			err := dec.Decode(&smpls)
 			if err != nil && errors.Is(err, io.EOF) {
 				break
 			}
 			if scenario.legacyNameFail {
-				if err == nil {
-					t.Fatal("Expected error when decoding without UTF-8 support enabled but got none")
-				}
-				model.NameValidationScheme = model.UTF8Validation
+				require.Errorf(t, err, "Expected error when decoding without UTF-8 support enabled but got none")
 				dec = &SampleDecoder{
-					Dec: &protoDecoder{r: strings.NewReader(scenario.in)},
+					Dec: &protoDecoder{r: strings.NewReader(scenario.in), s: model.UTF8Validation},
 					Opts: &DecodeOptions{
 						Timestamp: testTime,
 					},
@@ -393,37 +390,27 @@ func TestProtoDecoder(t *testing.T) {
 				if errors.Is(err, io.EOF) {
 					break
 				}
-				if err != nil {
-					t.Fatalf("Unexpected error when decoding with UTF-8 support: %v", err)
-				}
+				require.NoErrorf(t, err, "Unexpected error when decoding with UTF-8 support: %v", err)
 			}
 			if scenario.fail {
-				if err == nil {
-					t.Fatal("Expected error but got none")
-				}
+				require.Errorf(t, err, "Expected error but got none")
 				break
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			all = append(all, smpls...)
 		}
 		sort.Sort(all)
 		sort.Sort(scenario.expected)
-		if !reflect.DeepEqual(all, scenario.expected) {
-			t.Fatalf("%d. output does not match, want: %#v, got %#v", i, scenario.expected, all)
-		}
+		require.Truef(t, reflect.DeepEqual(all, scenario.expected), "%d. output does not match, want: %#v, got %#v", i, scenario.expected, all)
 	}
 }
 
 func TestProtoMultiMessageDecoder(t *testing.T) {
 	data, err := os.ReadFile("testdata/protobuf-multimessage")
-	if err != nil {
-		t.Fatalf("Reading file failed: %v", err)
-	}
+	require.NoErrorf(t, err, "Reading file failed: %v", err)
 
 	buf := bytes.NewReader(data)
-	decoder := NewDecoder(buf, fmtProtoDelim)
+	decoder := NewDecoder(buf, FmtProtoDelim)
 	var metrics []*dto.MetricFamily
 	for {
 		var mf dto.MetricFamily
@@ -436,9 +423,7 @@ func TestProtoMultiMessageDecoder(t *testing.T) {
 		metrics = append(metrics, &mf)
 	}
 
-	if len(metrics) != 6 {
-		t.Fatalf("Expected %d metrics but got %d!", 6, len(metrics))
-	}
+	require.Lenf(t, metrics, 6, "Expected %d metrics but got %d!", 6, len(metrics))
 }
 
 func testDiscriminatorHTTPHeader(t testing.TB) {
@@ -448,27 +433,27 @@ func testDiscriminatorHTTPHeader(t testing.TB) {
 	}{
 		{
 			input:  map[string]string{"Content-Type": `application/vnd.google.protobuf; proto="io.prometheus.client.MetricFamily"; encoding="delimited"`},
-			output: fmtProtoDelim,
+			output: FmtProtoDelim,
 		},
 		{
 			input:  map[string]string{"Content-Type": `application/vnd.google.protobuf; proto="illegal"; encoding="delimited"`},
-			output: fmtUnknown,
+			output: FmtUnknown,
 		},
 		{
 			input:  map[string]string{"Content-Type": `application/vnd.google.protobuf; proto="io.prometheus.client.MetricFamily"; encoding="illegal"`},
-			output: fmtUnknown,
+			output: FmtUnknown,
 		},
 		{
 			input:  map[string]string{"Content-Type": `text/plain; version=0.0.4`},
-			output: fmtText,
+			output: FmtText,
 		},
 		{
 			input:  map[string]string{"Content-Type": `text/plain`},
-			output: fmtText,
+			output: FmtText,
 		},
 		{
 			input:  map[string]string{"Content-Type": `text/plain; version=0.0.3`},
-			output: fmtUnknown,
+			output: FmtUnknown,
 		},
 	}
 
@@ -574,7 +559,7 @@ func TestTextDecoderWithBufioReader(t *testing.T) {
 
 	var decoded bool
 	r := bufio.NewReader(strings.NewReader(example))
-	dec := NewDecoder(r, fmtText)
+	dec := NewDecoder(r, FmtText)
 	for {
 		var mf dto.MetricFamily
 		if err := dec.Decode(&mf); err != nil {
@@ -591,7 +576,71 @@ func TestTextDecoderWithBufioReader(t *testing.T) {
 		}
 		decoded = true
 	}
-	if !decoded {
-		t.Fatal("Metric foo not decoded")
+	require.Truef(t, decoded, "Metric foo not decoded")
+}
+
+func TestNewDecoder(t *testing.T) {
+	om20Format, err := NewOpenMetricsFormat(OpenMetricsVersion_2_0_0)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		format      Format
+		expectError bool
+	}{
+		{
+			name:        "Text format",
+			format:      FmtText,
+			expectError: false,
+		},
+		{
+			name:        "ProtoDelim format",
+			format:      FmtProtoDelim,
+			expectError: false,
+		},
+		{
+			name:        "ProtoText format",
+			format:      FmtProtoText,
+			expectError: true,
+		},
+		{
+			name:        "ProtoCompact format",
+			format:      FmtProtoCompact,
+			expectError: true,
+		},
+		{
+			name:        "OpenMetrics 0.0.1",
+			format:      FmtOpenMetrics_0_0_1,
+			expectError: false,
+		},
+		{
+			name:        "OpenMetrics 1.0.0",
+			format:      FmtOpenMetrics_1_0_0,
+			expectError: false,
+		},
+		{
+			name:        "OpenMetrics 2.0.0",
+			format:      om20Format,
+			expectError: true,
+		},
+		{
+			name:        "OpenMetrics 2.0.0 with escaping",
+			format:      om20Format.WithEscapingScheme(model.ValueEncodingEscaping),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dec := NewDecoder(strings.NewReader(""), tt.format)
+			var mf dto.MetricFamily
+			err := dec.Decode(&mf)
+			if tt.expectError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), fmt.Sprintf("format %s not supported for decoding", tt.format))
+			} else if err != nil {
+				require.ErrorIs(t, err, io.EOF)
+			}
+		})
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestComparators(t *testing.T) {
@@ -25,26 +27,14 @@ func TestComparators(t *testing.T) {
 	t1b := TimeFromUnix(0)
 	t2 := TimeFromUnix(2*second - 1)
 
-	if !t1a.Equal(t1b) {
-		t.Fatalf("Expected %s to be equal to %s", t1a, t1b)
-	}
-	if t1a.Equal(t2) {
-		t.Fatalf("Expected %s to not be equal to %s", t1a, t2)
-	}
+	require.Truef(t, t1a.Equal(t1b), "Expected %s to be equal to %s", t1a, t1b)
+	require.Falsef(t, t1a.Equal(t2), "Expected %s to not be equal to %s", t1a, t2)
 
-	if !t1a.Before(t2) {
-		t.Fatalf("Expected %s to be before %s", t1a, t2)
-	}
-	if t1a.Before(t1b) {
-		t.Fatalf("Expected %s to not be before %s", t1a, t1b)
-	}
+	require.Truef(t, t1a.Before(t2), "Expected %s to be before %s", t1a, t2)
+	require.Falsef(t, t1a.Before(t1b), "Expected %s to not be before %s", t1a, t1b)
 
-	if !t2.After(t1a) {
-		t.Fatalf("Expected %s to be after %s", t2, t1a)
-	}
-	if t1b.After(t1a) {
-		t.Fatalf("Expected %s to not be after %s", t1b, t1a)
-	}
+	require.Truef(t, t2.After(t1a), "Expected %s to be after %s", t2, t1a)
+	require.Falsef(t, t1b.After(t1a), "Expected %s to not be after %s", t1b, t1a)
 }
 
 func TestTimeConversions(t *testing.T) {
@@ -56,19 +46,13 @@ func TestTimeConversions(t *testing.T) {
 	t2 := time.Unix(unixSecs, unixNsecs)
 
 	ts := TimeFromUnixNano(unixNano)
-	if !ts.Time().Equal(t1) {
-		t.Fatalf("Expected %s, got %s", t1, ts.Time())
-	}
+	require.Truef(t, ts.Time().Equal(t1), "Expected %s, got %s", t1, ts.Time())
 
 	// Test available precision.
 	ts = TimeFromUnixNano(t2.UnixNano())
-	if !ts.Time().Equal(t1) {
-		t.Fatalf("Expected %s, got %s", t1, ts.Time())
-	}
+	require.Truef(t, ts.Time().Equal(t1), "Expected %s, got %s", t1, ts.Time())
 
-	if ts.UnixNano() != unixNano-unixNano%nanosPerTick {
-		t.Fatalf("Expected %d, got %d", unixNano, ts.UnixNano())
-	}
+	require.Equalf(t, ts.UnixNano(), unixNano-unixNano%nanosPerTick, "Expected %d, got %d", unixNano, ts.UnixNano())
 }
 
 func TestDuration(t *testing.T) {
@@ -76,82 +60,202 @@ func TestDuration(t *testing.T) {
 	goTime := time.Unix(1136239445, 0)
 
 	ts := TimeFromUnix(goTime.Unix())
-	if !goTime.Add(duration).Equal(ts.Add(duration).Time()) {
-		t.Fatalf("Expected %s to be equal to %s", goTime.Add(duration), ts.Add(duration))
-	}
+	require.Truef(t, goTime.Add(duration).Equal(ts.Add(duration).Time()), "Expected %s to be equal to %s", goTime.Add(duration), ts.Add(duration))
 
 	earlier := ts.Add(-duration)
 	delta := ts.Sub(earlier)
-	if delta != duration {
-		t.Fatalf("Expected %s to be equal to %s", delta, duration)
-	}
+	require.Equalf(t, delta, duration, "Expected %s to be equal to %s", delta, duration)
+}
+
+func TestDurationConstants(t *testing.T) {
+	// require.Equal(expected, actual) — expected is the reference time.Duration cast.
+	require.Equal(t, Nanosecond, Duration(time.Nanosecond))
+	require.Equal(t, Microsecond, Duration(time.Microsecond))
+	require.Equal(t, Millisecond, Duration(time.Millisecond))
+	require.Equal(t, Second, Duration(time.Second))
+	require.Equal(t, Minute, Duration(time.Minute))
+	require.Equal(t, Hour, Duration(time.Hour))
+	require.Equal(t, Day, Duration(24*time.Hour))
+	require.Equal(t, Week, Duration(7*24*time.Hour))
+
+	// Typical usage from the issue: multiply integers by model constants.
+	require.Equal(t, 15*Day, Duration(15*24*time.Hour))
+	require.Equal(t, 5000*Millisecond, Duration(5000*time.Millisecond))
+}
+
+func TestDurationMilliseconds(t *testing.T) {
+	d := 2*Hour + 30*Minute + 15*Second + 250*Millisecond
+	require.Equal(t, time.Duration(d).Milliseconds(), d.Milliseconds())
+	require.Equal(t, int64(2*60*60*1000+30*60*1000+15*1000+250), d.Milliseconds())
+	require.Equal(t, int64(-1500), (-1500 * Millisecond).Milliseconds())
 }
 
 func TestParseDuration(t *testing.T) {
-	cases := []struct {
-		in  string
-		out time.Duration
+	type testCase struct {
+		in              string
+		out             time.Duration
+		expectedString  string
+		allowedNegative bool
+	}
 
-		expectedString string
-	}{
+	baseCases := []testCase{
 		{
-			in:             "0",
-			out:            0,
-			expectedString: "0s",
-		}, {
-			in:             "0w",
-			out:            0,
-			expectedString: "0s",
-		}, {
-			in:  "0s",
-			out: 0,
-		}, {
-			in:  "324ms",
-			out: 324 * time.Millisecond,
-		}, {
-			in:  "3s",
-			out: 3 * time.Second,
-		}, {
-			in:  "5m",
-			out: 5 * time.Minute,
-		}, {
-			in:  "1h",
-			out: time.Hour,
-		}, {
-			in:  "4d",
-			out: 4 * 24 * time.Hour,
-		}, {
-			in:  "4d1h",
-			out: 4*24*time.Hour + time.Hour,
-		}, {
-			in:             "14d",
-			out:            14 * 24 * time.Hour,
-			expectedString: "2w",
-		}, {
-			in:  "3w",
-			out: 3 * 7 * 24 * time.Hour,
-		}, {
-			in:             "3w2d1h",
-			out:            3*7*24*time.Hour + 2*24*time.Hour + time.Hour,
-			expectedString: "23d1h",
-		}, {
-			in:  "10y",
-			out: 10 * 365 * 24 * time.Hour,
+			in:              "0",
+			out:             0,
+			expectedString:  "0s",
+			allowedNegative: false,
+		},
+		{
+			in:              "0w",
+			out:             0,
+			expectedString:  "0s",
+			allowedNegative: false,
+		},
+		{
+			in:              "0s",
+			out:             0,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "324ms",
+			out:             324 * time.Millisecond,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "3s",
+			out:             3 * time.Second,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "5m",
+			out:             5 * time.Minute,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "1h",
+			out:             time.Hour,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "4d",
+			out:             4 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "4d1h",
+			out:             4*24*time.Hour + time.Hour,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "14d",
+			out:             14 * 24 * time.Hour,
+			expectedString:  "2w",
+			allowedNegative: false,
+		},
+		{
+			in:              "3w",
+			out:             3 * 7 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: false,
+		},
+		{
+			in:              "3w2d1h",
+			out:             3*7*24*time.Hour + 2*24*time.Hour + time.Hour,
+			expectedString:  "23d1h",
+			allowedNegative: false,
+		},
+		{
+			in:              "10y",
+			out:             10 * 365 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: false,
 		},
 	}
 
-	for _, c := range cases {
-		d, err := ParseDuration(c.in)
+	negativeCases := []testCase{
+		{
+			in:              "-3s",
+			out:             -3 * time.Second,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+		{
+			in:              "-5m",
+			out:             -5 * time.Minute,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+		{
+			in:              "-1h",
+			out:             -1 * time.Hour,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+		{
+			in:              "-2d",
+			out:             -2 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+		{
+			in:              "-1w",
+			out:             -7 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+		{
+			in:              "-3w2d1h",
+			out:             -(3*7*24*time.Hour + 2*24*time.Hour + time.Hour),
+			expectedString:  "-23d1h",
+			allowedNegative: true,
+		},
+		{
+			in:              "-10y",
+			out:             -10 * 365 * 24 * time.Hour,
+			expectedString:  "",
+			allowedNegative: true,
+		},
+	}
+
+	for _, c := range baseCases {
+		c.allowedNegative = true
+		negativeCases = append(negativeCases, c)
+	}
+
+	allCases := append(baseCases, negativeCases...)
+
+	for _, c := range allCases {
+		var (
+			d   Duration
+			err error
+		)
+
+		if c.allowedNegative {
+			d, err = ParseDurationAllowNegative(c.in)
+		} else {
+			d, err = ParseDuration(c.in)
+		}
+
 		if err != nil {
 			t.Errorf("Unexpected error on input %q", c.in)
 		}
+
 		if time.Duration(d) != c.out {
 			t.Errorf("Expected %v but got %v", c.out, d)
 		}
+
 		expectedString := c.expectedString
-		if c.expectedString == "" {
+		if expectedString == "" {
 			expectedString = c.in
 		}
+
 		if d.String() != expectedString {
 			t.Errorf("Expected duration string %q but got %q", c.in, d.String())
 		}
@@ -327,7 +431,6 @@ func TestParseBadDuration(t *testing.T) {
 	cases := []string{
 		"1",
 		"1y1m1d",
-		"-1w",
 		"1.5d",
 		"d",
 		"294y",
@@ -342,7 +445,6 @@ func TestParseBadDuration(t *testing.T) {
 		if err == nil {
 			t.Errorf("Expected error on input %s", c)
 		}
-
 	}
 }
 
@@ -353,27 +455,27 @@ func TestTimeJSON(t *testing.T) {
 	}{
 		{Time(1), `0.001`},
 		{Time(-1), `-0.001`},
+		{Time(1001), `1.001`},
+		{Time(-1001), `-1.001`},
+		{Time(123000), `123`},
+		{Time(123100), `123.1`},
+		{Time(123010), `123.01`},
 	}
 
 	for i, test := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			b, err := test.in.MarshalJSON()
-			if err != nil {
-				t.Fatalf("Error marshaling time: %v", err)
-			}
+			require.NoErrorf(t, err, "Error marshaling time: %v", err)
 
 			if string(b) != test.out {
 				t.Errorf("Mismatch in marshal expected=%s actual=%s", test.out, b)
 			}
 
 			var tm Time
-			if err := tm.UnmarshalJSON(b); err != nil {
-				t.Fatalf("Error Unmarshaling time: %v", err)
-			}
+			err = tm.UnmarshalJSON(b)
+			require.NoErrorf(t, err, "Error Unmarshaling time: %v", err)
 
-			if !test.in.Equal(tm) {
-				t.Fatalf("Mismatch after Unmarshal expected=%v actual=%v", test.in, tm)
-			}
+			require.Truef(t, test.in.Equal(tm), "Mismatch after Unmarshal expected=%v actual=%v", test.in, tm)
 		})
 	}
 }
@@ -383,8 +485,20 @@ func BenchmarkParseDuration(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		_, err := ParseDuration(data)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkUnmarshalTime(b *testing.B) {
+	cases := []string{"1780924784", "1780924784.01", "1780924784.001"}
+
+	for _, c := range cases {
+		b.Run(c, func(b *testing.B) {
+			var t Time
+			data := []byte(c)
+			for b.Loop() {
+				_ = t.UnmarshalJSON(data)
+			}
+		})
 	}
 }

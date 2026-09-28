@@ -22,12 +22,18 @@ import (
 	"os"
 	"testing"
 
+	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protodelim"
 
-	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/model"
 )
 
-var parser TextParser
+// The shared parsers are only read by tests; never change their scheme.
+var (
+	parser       = TextParser{scheme: model.UTF8Validation}
+	legacyParser = TextParser{scheme: model.LegacyValidation}
+)
 
 // Benchmarks to show how much penalty text format parsing actually inflicts.
 //
@@ -50,15 +56,12 @@ var parser TextParser
 func BenchmarkParseText(b *testing.B) {
 	b.StopTimer()
 	data, err := os.ReadFile("testdata/text")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err := parser.TextToMetricFamilies(bytes.NewReader(data)); err != nil {
-			b.Fatal(err)
-		}
+		_, err := parser.TextToMetricFamilies(bytes.NewReader(data))
+		require.NoError(b, err)
 	}
 }
 
@@ -67,19 +70,14 @@ func BenchmarkParseText(b *testing.B) {
 func BenchmarkParseTextGzip(b *testing.B) {
 	b.StopTimer()
 	data, err := os.ReadFile("testdata/text.gz")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
 		in, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			b.Fatal(err)
-		}
-		if _, err := parser.TextToMetricFamilies(in); err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
+		_, err = parser.TextToMetricFamilies(in)
+		require.NoError(b, err)
 	}
 }
 
@@ -92,9 +90,7 @@ func BenchmarkParseTextGzip(b *testing.B) {
 func BenchmarkParseProto(b *testing.B) {
 	b.StopTimer()
 	data, err := os.ReadFile("testdata/protobuf")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -120,17 +116,13 @@ func BenchmarkParseProto(b *testing.B) {
 func BenchmarkParseProtoGzip(b *testing.B) {
 	b.StopTimer()
 	data, err := os.ReadFile("testdata/protobuf.gz")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
 		family := &dto.MetricFamily{}
 		gz, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 		in := bufio.NewReader(gz)
 		unmarshaler := protodelim.UnmarshalOptions{
 			MaxSize: -1,
@@ -154,9 +146,7 @@ func BenchmarkParseProtoGzip(b *testing.B) {
 func BenchmarkParseProtoMap(b *testing.B) {
 	b.StopTimer()
 	data, err := os.ReadFile("testdata/protobuf")
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {

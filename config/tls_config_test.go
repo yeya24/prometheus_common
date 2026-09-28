@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +25,8 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v2"
+	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v2"
 )
 
 // LoadTLSConfig parses the given file into a tls.Config.
@@ -100,14 +102,10 @@ var expectedTLSConfigs = []struct {
 func TestValidTLSConfig(t *testing.T) {
 	for _, cfg := range expectedTLSConfigs {
 		got, err := LoadTLSConfig("testdata/" + cfg.filename)
-		if err != nil {
-			t.Fatalf("Error parsing %s: %s", cfg.filename, err)
-		}
+		require.NoErrorf(t, err, "Error parsing %s: %s", cfg.filename, err)
 		// non-nil functions are never equal.
 		got.GetClientCertificate = nil
-		if !reflect.DeepEqual(got, cfg.config) {
-			t.Fatalf("%v: unexpected config result: \n\n%v\n expected\n\n%v", cfg.filename, got, cfg.config)
-		}
+		require.Truef(t, reflect.DeepEqual(got, cfg.config), "%v: unexpected config result: \n\n%v\n expected\n\n%v", cfg.filename, got, cfg.config)
 	}
 }
 
@@ -135,9 +133,15 @@ func TestInvalidTLSConfig(t *testing.T) {
 }
 
 func TestTLSVersionStringer(t *testing.T) {
-	if s := (TLSVersion)(tls.VersionTLS13); s.String() != "TLS13" {
-		t.Fatalf("tls.VersionTLS13 string should be TLS13, got %s", s.String())
-	}
+	s := TLSVersion(tls.VersionTLS13)
+	require.Equalf(t, "TLS13", s.String(), "tls.VersionTLS13 string should be TLS13, got %s", s.String())
+}
+
+func TestTLSVersionStringerUnknown(t *testing.T) {
+	// An unknown TLS version (not present in TLSVersions) must fall back to its
+	// numeric value, not to the pointer address.
+	s := TLSVersion(0x9999) // 39321
+	require.Equal(t, "39321", s.String())
 }
 
 func TestTLSVersionMarshalYAML(t *testing.T) {
@@ -159,7 +163,7 @@ func TestTLSVersionMarshalYAML(t *testing.T) {
 		{
 			input:    TLSVersion(999),
 			expected: "",
-			err:      fmt.Errorf("unknown TLS version: 999"),
+			err:      errors.New("unknown TLS version: 999"),
 		},
 	}
 
@@ -173,9 +177,7 @@ func TestTLSVersionMarshalYAML(t *testing.T) {
 				return
 			}
 			actual := string(actualBytes)
-			if actual != test.expected {
-				t.Fatalf("returned %s, expected %s", actual, test.expected)
-			}
+			require.Equalf(t, test.expected, actual, "returned %s, expected %s", actual, test.expected)
 		})
 	}
 }
@@ -199,7 +201,7 @@ func TestTLSVersionMarshalJSON(t *testing.T) {
 		{
 			input:    TLSVersion(999),
 			expected: "",
-			err:      fmt.Errorf("unknown TLS version: 999"),
+			err:      errors.New("unknown TLS version: 999"),
 		},
 	}
 
@@ -213,9 +215,7 @@ func TestTLSVersionMarshalJSON(t *testing.T) {
 				return
 			}
 			actual := string(actualBytes)
-			if actual != test.expected {
-				t.Fatalf("returned %s, expected %s", actual, test.expected)
-			}
+			require.Equalf(t, test.expected, actual, "returned %s, expected %s", actual, test.expected)
 		})
 	}
 }
